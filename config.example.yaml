@@ -1,0 +1,377 @@
+# QueryNest 配置文件示例
+# 复制此文件为 config.yaml 并根据实际环境修改配置
+
+# MongoDB实例配置
+# 支持任意环境命名，不限于传统的 dev/test/prod
+instances:
+  # 生产环境实例
+  - name: "production-main"
+    alias: "生产主库"
+    connection_string: "mongodb://querynest_readonly:${PROD_MONGODB_PASSWORD}@prod-mongodb.example.com:27017/admin?ssl=true"
+    environment: "production"  # 可以是任意环境名称
+    description: "生产环境主MongoDB实例，包含核心业务数据"
+    status: "active"
+    
+  # 业务系统实例示例
+  - name: "crm-system"
+    alias: "CRM业务系统"
+    connection_string: "mongodb://crm_user:${CRM_MONGODB_PASSWORD}@crm-mongodb.example.com:27017/crm_db"
+    environment: "crm-prod"  # 业务系统环境
+    description: "CRM系统专用MongoDB实例"
+    status: "active"
+    
+  # 不同地域实例示例
+  - name: "beijing-cluster"
+    alias: "北京集群"
+    connection_string: "mongodb://readonly:${BJ_MONGODB_PASSWORD}@bj-mongodb.example.com:27017/admin"
+    environment: "beijing"  # 地域环境
+    description: "北京数据中心MongoDB集群"
+    status: "active"
+    
+  # 测试环境实例
+  - name: "testing-env"
+    alias: "测试环境"
+    connection_string: "mongodb://test_user:${TEST_MONGODB_PASSWORD}@test-mongodb.example.com:27017/admin"
+    environment: "testing"  # 传统测试环境
+    description: "功能测试环境MongoDB实例"
+    status: "active"
+    
+  # UAT环境实例
+  - name: "uat-system"
+    alias: "用户验收测试"
+    connection_string: "mongodb://uat_user:${UAT_MONGODB_PASSWORD}@uat-mongodb.example.com:27017/admin"
+    environment: "uat"  # UAT环境
+    description: "用户验收测试环境"
+    status: "active"
+    
+  # SIT环境实例
+  - name: "sit-integration"
+    alias: "系统集成测试"
+    connection_string: "mongodb://sit_user:${SIT_MONGODB_PASSWORD}@sit-mongodb.example.com:27017/admin"
+    environment: "sit"  # SIT环境
+    description: "系统集成测试环境"
+    status: "active"
+    
+  # 开发环境实例
+  - name: "development-local"
+    alias: "本地开发环境"
+    connection_string: "mongodb://dev_user:${DEV_MONGODB_PASSWORD}@dev-mongodb.example.com:27017/admin"
+    environment: "development"  # 开发环境
+    description: "开发人员本地测试环境"
+    status: "active"
+    
+  # 预发布环境
+  - name: "staging-pre"
+    alias: "预发布环境"
+    connection_string: "mongodb://staging_user:${STAGING_MONGODB_PASSWORD}@staging-mongodb.example.com:27017/admin"
+    environment: "staging"  # 预发布环境
+    description: "生产前最后验证环境"
+    status: "active"
+    host: "localhost"                  # 本地开发环境
+    port: 27017
+    username: "dev_user"               # 可选，本地环境可能不需要认证
+    password: "${DEV_MONGODB_PASSWORD}"
+    auth_database: "admin"
+    description: "本地开发环境MongoDB实例"
+    
+    ssl: false
+    max_pool_size: 3
+    min_pool_size: 1
+    
+    tags:
+      - "development"
+      - "local"
+
+# 元数据存储配置
+metadata:
+  # 元数据存储实例（建议使用独立实例）
+  host: "metadata-mongodb.example.com"  # 修改为实际元数据库地址
+  port: 27017
+  username: "querynest_metadata"
+  password: "${METADATA_MONGODB_PASSWORD}"  # 使用环境变量
+  auth_database: "admin"
+  database_name: "querynest_metadata"
+  
+  # 元数据集合名称配置
+  collections:
+    instances: "instances"              # 实例信息
+    databases: "databases"              # 数据库信息
+    collections: "collections"          # 集合信息
+    fields: "fields"                    # 字段信息
+    query_history: "query_history"      # 查询历史
+    semantic_cache: "semantic_cache"    # 语义缓存
+  
+  # 元数据库连接配置
+  ssl: true
+  max_pool_size: 5
+  min_pool_size: 1
+
+# 安全配置
+security:
+  # 查询权限控制
+  query_permissions:
+    # 允许的查询操作
+    allowed_operations:
+      - "find"          # 查找文档
+      - "aggregate"     # 聚合查询
+      - "count"         # 计数查询
+      - "distinct"      # 去重查询
+    
+    # 禁止的查询操作
+    forbidden_operations:
+      - "insert"        # 禁止插入
+      - "update"        # 禁止更新
+      - "delete"        # 禁止删除
+      - "drop"          # 禁止删除集合
+      - "create"        # 禁止创建集合
+  
+  # 查询限制
+  query_limits:
+    max_documents_per_query: 1000       # 单次查询最大返回文档数
+    max_execution_time_ms: 30000        # 查询最大执行时间（毫秒）
+    max_memory_usage_mb: 100            # 查询最大内存使用（MB）
+    max_concurrent_queries: 10          # 最大并发查询数
+  
+  # 数据脱敏配置
+  data_masking:
+    enabled: true
+    
+    # 敏感字段模式（正则表达式）
+    sensitive_field_patterns:
+      - ".*password.*"     # 密码相关字段
+      - ".*secret.*"       # 密钥相关字段
+      - ".*token.*"        # 令牌相关字段
+      - ".*key.*"          # 密钥相关字段
+      - ".*phone.*"        # 电话号码
+      - ".*mobile.*"       # 手机号码
+      - ".*email.*"        # 邮箱地址
+      - ".*id_card.*"      # 身份证号
+      - ".*credit_card.*"  # 信用卡号
+    
+    # 脱敏策略
+    masking_strategies:
+      phone: "mask_middle"      # 手机号中间4位脱敏
+      email: "mask_domain"      # 邮箱域名脱敏
+      id_card: "mask_middle"    # 身份证中间位脱敏
+      credit_card: "mask_all"   # 信用卡号全部脱敏
+      default: "mask_all"       # 默认全部脱敏
+  
+  # IP访问控制（可选）
+  ip_whitelist:
+    enabled: false
+    allowed_ips:
+      - "192.168.1.0/24"    # 内网IP段
+      - "10.0.0.0/8"        # 内网IP段
+      - "172.16.0.0/12"     # 内网IP段
+
+# MCP服务配置
+mcp:
+  # 服务基本配置
+  server:
+    name: "QueryNest"
+    version: "1.0.0"
+    description: "MongoDB多实例查询服务"
+  
+  # 工具配置
+  tools:
+    # 查询工具
+    query_tools:
+      enabled: true
+      
+      # 自然语言查询
+      natural_query:
+        enabled: true
+        max_intent_length: 500          # 最大查询意图长度
+        semantic_similarity_threshold: 0.7  # 语义相似度阈值
+      
+      # MongoDB查询
+      mongodb_query:
+        enabled: true
+        validate_syntax: true           # 验证查询语法
+      
+      # 聚合查询
+      aggregation_query:
+        enabled: true
+        max_pipeline_stages: 10         # 最大管道阶段数
+    
+    # 发现工具
+    discovery_tools:
+      enabled: true
+      
+      # 实例发现
+      instance_discovery:
+        enabled: true
+        include_metadata: true          # 包含元数据信息
+      
+      # 数据库发现
+      database_discovery:
+        enabled: true
+        exclude_system_dbs: true        # 排除系统数据库
+      
+      # 集合发现
+      collection_discovery:
+        enabled: true
+        include_statistics: true        # 包含统计信息
+      
+      # 字段搜索
+      field_search:
+        enabled: true
+        fuzzy_search: true              # 启用模糊搜索
+    
+    # 分析工具
+    analysis_tools:
+      enabled: true
+      
+      # 统计分析
+      statistics_analysis:
+        enabled: true
+        sample_size: 1000               # 统计分析样本大小
+      
+      # 性能分析
+      performance_analysis:
+        enabled: false
+        explain_queries: true           # 启用查询解释
+      
+      # 历史分析
+      history_analysis:
+        enabled: true
+        retention_days: 30              # 历史数据保留天数
+
+# 扫描器配置
+scanner:
+  enabled: true
+  
+  # 扫描调度
+  scheduling:
+    auto_scan: true                   # 启用自动扫描
+    scan_interval: 3600               # 扫描间隔（秒）
+    scan_on_startup: true             # 启动时扫描
+  
+  # 扫描参数
+  parameters:
+    max_sample_documents: 100         # 每个集合最大采样文档数
+    field_analysis_depth: 3           # 字段分析深度
+    concurrent_collections: 5         # 并发扫描集合数
+    
+    # 语义分析
+    semantic_analysis:
+      enabled: true
+      confidence_threshold: 0.8       # 语义分析置信度阈值
+  
+  # 扫描过滤
+  filters:
+    # 排除的数据库
+    exclude_databases:
+      - "admin"
+      - "config"
+      - "local"
+    
+    # 排除的集合模式
+    exclude_collection_patterns:
+      - "system.*"        # 系统集合
+      - ".*\.tmp"         # 临时集合
+      - ".*\.backup"      # 备份集合
+
+# 日志配置
+logging:
+  level: "INFO"                       # 日志级别: DEBUG, INFO, WARNING, ERROR
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  
+  # 文件日志
+  file:
+    enabled: true
+    path: "logs/querynest.log"
+    max_size: "10MB"                  # 单个日志文件最大大小
+    backup_count: 5                   # 保留的日志文件数量
+    rotation: "daily"                 # 轮转策略: daily, weekly, monthly
+  
+  # 控制台日志
+  console:
+    enabled: true
+    colored: true                     # 启用彩色输出
+  
+  # 特定模块日志级别
+  loggers:
+    "src.database": "DEBUG"
+    "src.query": "DEBUG"
+    "src.scanner": "INFO"
+    "src.mcp_tools": "INFO"
+
+# 性能配置
+performance:
+  # 缓存配置
+  cache:
+    enabled: true
+    
+    # 查询结果缓存
+    query_cache:
+      enabled: true
+      ttl: 300                        # 缓存生存时间（秒）
+      max_size: 1000                  # 最大缓存条目数
+    
+    # 元数据缓存
+    metadata_cache:
+      enabled: true
+      ttl: 1800                       # 元数据缓存生存时间（秒）
+      max_size: 500                   # 最大缓存条目数
+  
+  # 连接池配置
+  connection_pool:
+    health_check_interval: 30         # 健康检查间隔（秒）
+    connection_timeout: 5             # 连接超时（秒）
+    socket_timeout: 30                # 套接字超时（秒）
+  
+  # 查询优化
+  query_optimization:
+    enabled: true
+    auto_index_suggestions: true      # 自动索引建议
+    query_plan_cache: true            # 查询计划缓存
+
+# 监控配置
+monitoring:
+  # 指标收集
+  metrics:
+    enabled: true
+    collection_interval: 60           # 指标收集间隔（秒）
+    
+    # 导出配置
+    exporters:
+      prometheus:
+        enabled: false
+        port: 9090
+        path: "/metrics"
+      
+      file:
+        enabled: true
+        path: "metrics/querynest_metrics.json"
+        rotation_interval: 3600       # 文件轮转间隔（秒）
+  
+  # 健康检查
+  health_check:
+    enabled: true
+    endpoint: "/health"
+    check_interval: 30                # 健康检查间隔（秒）
+    
+    # 检查项目
+    checks:
+      - "database_connections"        # 数据库连接检查
+      - "metadata_store"              # 元数据存储检查
+      - "query_engine"                # 查询引擎检查
+
+# 开发配置
+development:
+  # 调试模式
+  debug: false
+  
+  # 热重载
+  hot_reload: false
+  
+  # 性能分析
+  profiling:
+    enabled: false
+    output_dir: "profiling"
+  
+  # 测试配置
+  testing:
+    mock_data: false                  # 使用模拟数据
+    test_database_prefix: "test_"     # 测试数据库前缀

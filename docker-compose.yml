@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  querynest:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./logs:/app/logs
+      - ./data:/app/data
+    environment:
+      - QUERYNEST_CONFIG_PATH=/app/config.yaml
+      - QUERYNEST_LOG_LEVEL=INFO
+      - QUERYNEST_MCP_TRANSPORT=stdio
+    restart: unless-stopped
+    depends_on:
+      - mongodb
+
+  mongodb:
+    image: mongo:5.0
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=password
+    restart: unless-stopped
+
+volumes:
+  mongodb_data:
