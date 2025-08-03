@@ -274,10 +274,15 @@ async def main():
     import argparse
     
     parser = argparse.ArgumentParser(description="QueryNest MCP MongoDB查询服务")
+    
+    # 默认配置路径：优先使用环境变量
+    import os
+    default_config = os.environ.get('QUERYNEST_CONFIG_PATH', 'config.yaml')
+    
     parser.add_argument(
         "--config",
-        default="config.yaml",
-        help="配置文件路径 (默认: config.yaml)"
+        default=default_config,
+        help=f"配置文件路径 (默认: {default_config})"
     )
     parser.add_argument(
         "--log-level",
@@ -299,12 +304,44 @@ async def main():
 
 def cli_main():
     """命令行入口点"""
+    # 启动时的路径修复逻辑
+    import os
+    from pathlib import Path
+    
+    # 获取logger
+    logger = structlog.get_logger(__name__)
+    
+    # 尝试找到项目根目录和配置文件
+    possible_roots = [
+        Path.cwd(),  # 当前工作目录
+        Path(__file__).parent,  # mcp_server.py 所在目录
+        Path("C:/Users/zaishu.niu/PycharmProjects/QueryNest"),  # 硬编码路径作为后备
+    ]
+    
+    # 查找配置文件并设置环境变量
+    for root in possible_roots:
+        config_file = root / "config.yaml"
+        if config_file.exists():
+            os.environ['QUERYNEST_CONFIG_PATH'] = str(config_file)
+            logger.info(f"Found config file at: {config_file}")
+            # 确保工作目录是项目根目录
+            if os.getcwd() != str(root):
+                os.chdir(root)
+                logger.info(f"Changed working directory to: {root}")
+            # 添加到Python路径
+            if str(root) not in sys.path:
+                sys.path.insert(0, str(root))
+                logger.info(f"Added to Python path: {root}")
+            break
+    
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\n服务器已停止")
     except Exception as e:
         print(f"服务器启动失败: {e}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
 if __name__ == "__main__":

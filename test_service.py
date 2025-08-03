@@ -12,13 +12,13 @@ from typing import Dict, Any
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-from src.config import QueryNestConfig
-from src.database.connection_manager import ConnectionManager
-from src.database.metadata_manager import MetadataManager
-from src.database.query_engine import QueryEngine
-from src.scanner.structure_scanner import StructureScanner
-from src.scanner.semantic_analyzer import SemanticAnalyzer
-from src.mcp_tools import (
+from config import QueryNestConfig
+from database.connection_manager import ConnectionManager
+from database.metadata_manager import MetadataManager
+from database.query_engine import QueryEngine
+from scanner.structure_scanner import StructureScanner
+from scanner.semantic_analyzer import SemanticAnalyzer
+from mcp_tools import (
     InstanceDiscoveryTool,
     DatabaseDiscoveryTool,
     CollectionAnalysisTool,

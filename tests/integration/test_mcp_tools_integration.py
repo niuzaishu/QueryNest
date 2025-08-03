@@ -5,11 +5,17 @@ from mcp.types import TextContent
 
 from .base_integration_test import BaseIntegrationTest
 from .test_config import TEST_INSTANCE_CONFIG, TEST_DATA
-from src.mcp_tools.instance_discovery import InstanceDiscoveryTool
-from src.mcp_tools.database_discovery import DatabaseDiscoveryTool
-from src.mcp_tools.collection_analysis import CollectionAnalysisTool
-from src.mcp_tools.query_generation import QueryGenerationTool
-from src.mcp_tools.semantic_completion import SemanticCompletionTool
+import sys
+from pathlib import Path
+# 添加项目根目录到Python路径
+project_root = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(project_root))
+
+from mcp_tools.instance_discovery import InstanceDiscoveryTool
+from mcp_tools.database_discovery import DatabaseDiscoveryTool
+from mcp_tools.collection_analysis import CollectionAnalysisTool
+from mcp_tools.query_generation import QueryGenerationTool
+from mcp_tools.semantic_completion import SemanticCompletionTool
 
 
 @pytest.mark.integration

@@ -22,7 +22,7 @@ async def test_semantic_completion_basic():
     
     try:
         # 直接导入和测试语义补全工具的核心功能
-        from src.mcp_tools.query_generation import QueryGenerationTool
+        from mcp_tools.query_generation import QueryGenerationTool
         
         # 创建一个模拟的查询生成工具实例
         class MockConnectionManager:

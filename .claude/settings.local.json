@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find \"C:\\Users\\zaishu.niu\\PycharmProjects\\QueryNest\" -name \"src\" -type d)",
+      "Bash(python -c \"from config import QueryNestConfig; print(''配置模块导入成功'')\")",
+      "Bash(python -c \"import sys; sys.path.insert(0, ''C:/Users/zaishu.niu/PycharmProjects/QueryNest''); from config import QueryNestConfig; print(''配置模块导入成功'')\")",
+      "Bash(uvx --from \"C:\\Users\\zaishu.niu\\PycharmProjects\\QueryNest\" querynest-mcp --config \"C:\\Users\\zaishu.niu\\PycharmProjects\\QueryNest\\config.yaml\")",
+      "Bash(uvx --from . querynest-mcp)",
+      "Bash(python test_config_loading.py)",
+      "Bash(cp pyproject_simple.toml pyproject.toml)",
+      "Bash(rm \"C:\\Users\\zaishu.niu\\PycharmProjects\\QueryNest\\mcp_server_simple.py\" \"C:\\Users\\zaishu.niu\\PycharmProjects\\QueryNest\\pyproject_simple.toml\")",
+      "Bash(python -m py_compile \"C:\\Users\\zaishu.niu\\PycharmProjects\\QueryNest\\mcp_server.py\")",
+      "Bash(cp pyproject_minimal.toml pyproject.toml)"
+    ],
+    "deny": []
+  }
+}

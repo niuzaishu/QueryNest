@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """配置管理模块"""
 
+import os
 from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, Field, validator, ConfigDict
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 from pydantic_settings import BaseSettings
 import yaml
 from pathlib import Path
@@ -17,7 +18,8 @@ class MongoInstanceConfig(BaseModel):
     description: str = Field(default="", description="实例描述")
     status: str = Field(default="active", description="实例状态")
     
-    @validator('environment')
+    @field_validator('environment')
+    @classmethod
     def validate_environment(cls, v):
         # 移除硬编码的环境限制，支持任意环境命名
         # 只进行基本的字符串验证
@@ -25,7 +27,8 @@ class MongoInstanceConfig(BaseModel):
             raise ValueError('环境类型必须是非空字符串')
         return v.strip()
     
-    @validator('status')
+    @field_validator('status')
+    @classmethod
     def validate_status(cls, v):
         if v not in ['active', 'inactive']:
             raise ValueError('状态必须是 active 或 inactive')
@@ -115,19 +118,40 @@ class QueryNestConfig(BaseSettings):
         """从YAML文件加载配置"""
         config_file = Path(config_path)
         
-        # 如果是相对路径，优先相对于当前工作目录解析
+        # 如果是相对路径，使用多种策略查找配置文件
         if not config_file.is_absolute():
-            # 首先尝试相对于当前工作目录
-            cwd_config = Path.cwd() / config_path
-            if cwd_config.exists():
-                config_file = cwd_config
-            else:
-                # 如果当前工作目录没有找到，则相对于当前文件所在目录解析
-                current_dir = Path(__file__).parent
-                config_file = current_dir / config_path
-        
-        if not config_file.exists():
-            raise FileNotFoundError(f"Configuration file not found: {config_path}")
+            search_paths = [
+                # 1. 当前工作目录
+                Path.cwd() / config_path,
+                # 2. 项目根目录（config.py 所在目录）
+                Path(__file__).parent / config_path,
+                # 3. 环境变量指定的配置目录
+                Path(os.environ.get('QUERYNEST_CONFIG_DIR', '.')) / config_path,
+                # 4. 用户主目录下的 .querynest 目录
+                Path.home() / '.querynest' / config_path,
+                # 5. /etc/querynest/ 目录（Linux/Unix 系统）
+                Path('/etc/querynest') / config_path,
+            ]
+            
+            # 尝试每个路径
+            config_file = None
+            for search_path in search_paths:
+                if search_path.exists():
+                    config_file = search_path
+                    break
+            
+            if config_file is None:
+                # 生成详细的错误信息，显示所有搜索的路径
+                searched_paths = '\n  - '.join([str(p) for p in search_paths])
+                raise FileNotFoundError(
+                    f"Configuration file not found: {config_path}\n"
+                    f"Searched in:\n  - {searched_paths}"
+                )
+        else:
+            # 绝对路径直接检查
+            if not config_file.exists():
+                raise FileNotFoundError(f"Configuration file not found: {config_path}")
+            
             
         with open(config_file, 'r', encoding='utf-8') as f:
             config_data = yaml.safe_load(f)

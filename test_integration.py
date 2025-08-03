@@ -15,10 +15,10 @@ import pytest
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-from src.config import load_config
-from src.database.connection_manager import ConnectionManager
-from src.database.query_engine import QueryEngine
-from src.database.metadata_manager import MetadataManager
+from config import load_config
+from database.connection_manager import ConnectionManager
+from database.query_engine import QueryEngine
+from database.metadata_manager import MetadataManager
 
 @pytest.mark.asyncio
 async def test_basic_functionality():

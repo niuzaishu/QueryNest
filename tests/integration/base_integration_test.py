@@ -5,10 +5,16 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from typing import Dict, Any, List
 
 from .test_config import TEST_DB_CONFIG, TEST_DATA, TEST_INDEXES, TEST_INSTANCE_CONFIG
-from src.database.connection_manager import ConnectionManager
-from src.database.metadata_manager import MetadataManager
-from src.scanner.semantic_analyzer import SemanticAnalyzer
-from src.config import QueryNestConfig
+import sys
+from pathlib import Path
+# 添加项目根目录到Python路径
+project_root = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(project_root))
+
+from database.connection_manager import ConnectionManager
+from database.metadata_manager import MetadataManager
+from scanner.semantic_analyzer import SemanticAnalyzer
+from config import QueryNestConfig
 
 
 class BaseIntegrationTest:

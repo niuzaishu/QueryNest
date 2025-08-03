@@ -14,11 +14,11 @@ from pathlib import Path
 # 添加项目根目录到Python路径
 sys.path.insert(0, str(Path(__file__).parent))
 
-from src.mcp_server import QueryNestMCPServer
-from src.config import ConfigLoader
-from src.utils.logger import setup_logging
-from src.utils.startup_validator import validate_startup_environment
-from src.utils import error_handler
+from mcp_server import QueryNestMCPServer
+from config import ConfigLoader
+from utils.logger import setup_logging
+from utils.startup_validator import validate_startup_environment
+from utils import error_handler
 
 # 设置基本日志
 logging.basicConfig(
