@@ -7,6 +7,11 @@ from mcp.types import Tool, TextContent
 
 from database.connection_manager import ConnectionManager
 from database.metadata_manager import MetadataManager
+from utils.parameter_validator import (
+    ParameterValidator, MCPParameterHelper, ValidationResult,
+    is_non_empty_string, is_boolean, is_valid_instance_id, validate_instance_exists
+)
+from utils.tool_context import get_context_manager, ToolExecutionContext
 
 
 logger = structlog.get_logger(__name__)
@@ -18,6 +23,8 @@ class DatabaseDiscoveryTool:
     def __init__(self, connection_manager: ConnectionManager, metadata_manager: MetadataManager):
         self.connection_manager = connection_manager
         self.metadata_manager = metadata_manager
+        self.context_manager = get_context_manager()
+        self.validator = self._setup_validator()
     
     def get_tool_definition(self) -> Tool:
         """获取工具定义"""
@@ -51,8 +58,81 @@ class DatabaseDiscoveryTool:
             }
         )
     
+    def _setup_validator(self) -> ParameterValidator:
+        """设置参数验证器"""
+        validator = ParameterValidator()
+        
+        async def get_instance_options():
+            """获取可用实例选项"""
+            try:
+                instances = await self.connection_manager.get_all_instances()
+                options = []
+                for instance_id, instance_config in instances.items():
+                    options.append({
+                        'value': instance_id,
+                        'display_name': instance_id,
+                        'description': f"{instance_config.environment} 环境 - {instance_config.description or '无描述'}",
+                        'extra_info': f"状态: {instance_config.status}"
+                    })
+                return options
+            except Exception as e:
+                logger.warning("获取实例选项失败", error=str(e))
+                return []
+        
+        validator.add_required_parameter(
+            name="instance_id",
+            type_check=lambda x: is_non_empty_string(x) and is_valid_instance_id(x),
+            validator=lambda x, ctx: validate_instance_exists(x, ctx.connection_manager),
+            options_provider=get_instance_options,
+            description="要探索的MongoDB实例标识符",
+            user_friendly_name="MongoDB实例"
+        )
+        
+        validator.add_optional_parameter(
+            name="include_collections",
+            type_check=is_boolean,
+            description="是否包含每个数据库的集合列表",
+            user_friendly_name="包含集合列表"
+        )
+        
+        validator.add_optional_parameter(
+            name="include_stats",
+            type_check=is_boolean,
+            description="是否包含数据库统计信息",
+            user_friendly_name="包含统计信息"
+        )
+        
+        validator.add_optional_parameter(
+            name="filter_system",
+            type_check=is_boolean,
+            description="是否过滤系统数据库（admin, local, config）",
+            user_friendly_name="过滤系统数据库"
+        )
+        
+        return validator
+
     async def execute(self, arguments: Dict[str, Any]) -> List[TextContent]:
         """执行数据库发现"""
+        # 参数验证和智能补全
+        context = self.context_manager.get_or_create_context()
+        context.connection_manager = self.connection_manager
+        
+        # 尝试从上下文推断缺失参数
+        if not arguments.get("instance_id"):
+            inferred_params = context.infer_missing_parameters()
+            if inferred_params.get("instance_id"):
+                arguments["instance_id"] = inferred_params["instance_id"]
+                logger.info("从上下文推断实例ID", instance_id=arguments["instance_id"])
+        
+        validation_result, errors = await self.validator.validate_parameters(arguments, context)
+        
+        if validation_result != ValidationResult.VALID:
+            return MCPParameterHelper.create_error_response(errors)
+        
+        # 记录工具调用到上下文并更新上下文
+        context.add_to_chain("discover_databases", arguments)
+        self.context_manager.update_context(instance_id=arguments["instance_id"])
+        
         instance_id = arguments["instance_id"]
         include_collections = arguments.get("include_collections", False)
         include_stats = arguments.get("include_stats", False)

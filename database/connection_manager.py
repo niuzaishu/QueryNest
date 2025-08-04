@@ -165,7 +165,7 @@ class ConnectionManager:
             await metadata_db.command('ping')
             
             # 创建基础集合（如果不存在）
-            collections = ['instances', 'databases', 'collections', 'fields', 'query_history']
+            collections = ['instances', 'databases', 'collections', 'fields', 'query_history', 'semantic_learning']
             existing_collections = await metadata_db.list_collection_names()
             for collection_name in collections:
                 if collection_name not in existing_collections:

@@ -9,6 +9,7 @@ from .semantic_completion import SemanticCompletionTool
 from .query_generation import QueryGenerationTool
 from .query_confirmation import QueryConfirmationTool
 from .feedback_tools import FeedbackTools
+from .workflow_management import WorkflowStatusTool, WorkflowResetTool
 
 __all__ = [
     "InstanceDiscoveryTool",
@@ -18,5 +19,7 @@ __all__ = [
     "SemanticCompletionTool",
     "QueryGenerationTool",
     "QueryConfirmationTool",
-    "FeedbackTools"
+    "FeedbackTools",
+    "WorkflowStatusTool",
+    "WorkflowResetTool"
 ]

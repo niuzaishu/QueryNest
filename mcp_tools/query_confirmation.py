@@ -198,31 +198,49 @@ class QueryConfirmationTool:
                                 mongodb_query: Dict[str, Any], limit: int, explain: bool) -> Dict[str, Any]:
         """执行查找查询"""
         try:
-            filter_query = mongodb_query.get("filter", {})
-            sort_query = mongodb_query.get("sort")
-            projection = mongodb_query.get("projection")
+            # 判断mongodb_query的格式，如果直接是查询条件则使用它，否则提取filter
+            if "filter" in mongodb_query:
+                filter_query = mongodb_query.get("filter", {})
+                sort_query = mongodb_query.get("sort")
+                projection = mongodb_query.get("projection")
+            else:
+                # 直接作为查询条件使用
+                filter_query = mongodb_query
+                sort_query = None
+                projection = None
             
             # 执行查询
-            result = await self.query_engine.execute_find_query(
-                instance_id=instance_id,
+            query_result = await self.query_engine.execute_find_query(
+                instance_name=instance_id,
                 database_name=database_name,
                 collection_name=collection_name,
-                filter_query=filter_query,
+                query=filter_query,
                 projection=projection,
                 sort=sort_query,
                 limit=limit
             )
             
-            if explain and "documents" in result:
+            # 转换结果格式
+            if not query_result["success"]:
+                return {"error": query_result["error"]}
+            
+            result = {
+                "documents": query_result["data"]["documents"],
+                "count": query_result["data"]["count"],
+                "execution_time": query_result["data"]["execution_time"],
+                "limited": query_result["data"].get("limited", False)
+            }
+            
+            if explain and result["documents"]:
                 # 获取查询执行计划
                 explain_result = await self.query_engine.explain_query(
-                    instance_id=instance_id,
+                    instance_name=instance_id,
                     database_name=database_name,
                     collection_name=collection_name,
-                    filter_query=filter_query,
-                    sort=sort_query
+                    query=filter_query
                 )
-                result["explain"] = explain_result
+                if explain_result["success"]:
+                    result["explain"] = explain_result["data"]
             
             return result
             
@@ -233,15 +251,29 @@ class QueryConfirmationTool:
                                  mongodb_query: Dict[str, Any]) -> Dict[str, Any]:
         """执行计数查询"""
         try:
-            filter_query = mongodb_query.get("filter", {})
+            # 判断mongodb_query的格式，如果直接是查询条件则使用它，否则提取filter
+            if "filter" in mongodb_query:
+                filter_query = mongodb_query.get("filter", {})
+            else:
+                # 直接作为查询条件使用
+                filter_query = mongodb_query
             
             # 执行计数查询
-            result = await self.query_engine.count_documents(
-                instance_id=instance_id,
+            query_result = await self.query_engine.count_documents(
+                instance_name=instance_id,
                 database_name=database_name,
                 collection_name=collection_name,
-                filter_query=filter_query
+                query=filter_query
             )
+            
+            # 转换结果格式
+            if not query_result["success"]:
+                return {"error": query_result["error"]}
+            
+            result = {
+                "count": query_result["data"]["count"],
+                "execution_time": query_result["data"]["execution_time"]
+            }
             
             return result
             
@@ -260,14 +292,25 @@ class QueryConfirmationTool:
                 pipeline.append({"$limit": limit})
             
             # 执行聚合查询
-            result = await self.query_engine.execute_aggregation(
-                instance_id=instance_id,
+            query_result = await self.query_engine.execute_aggregation(
+                instance_name=instance_id,
                 database_name=database_name,
                 collection_name=collection_name,
                 pipeline=pipeline
             )
             
-            if explain and "documents" in result:
+            # 转换结果格式
+            if not query_result["success"]:
+                return {"error": query_result["error"]}
+            
+            result = {
+                "documents": query_result["data"]["documents"],
+                "count": query_result["data"]["count"],
+                "execution_time": query_result["data"]["execution_time"],
+                "limited": query_result["data"].get("limited", False)
+            }
+            
+            if explain and result["documents"]:
                 # 聚合查询的执行计划
                 try:
                     connection = self.connection_manager.get_instance_connection(instance_id)
@@ -295,19 +338,38 @@ class QueryConfirmationTool:
         """执行去重查询"""
         try:
             field = mongodb_query.get("field")
-            filter_query = mongodb_query.get("filter", {})
+            # 判断mongodb_query的格式，如果直接是查询条件则使用它，否则提取filter
+            if "filter" in mongodb_query:
+                filter_query = mongodb_query.get("filter", {})
+            elif "field" in mongodb_query:
+                # 如果有field键，说明是结构化格式，提取filter
+                filter_query = mongodb_query.get("filter", {})
+            else:
+                # 直接作为查询条件使用
+                filter_query = mongodb_query
             
             if not field:
                 return {"error": "去重查询缺少字段参数"}
             
             # 执行去重查询
-            result = await self.query_engine.get_distinct_values(
-                instance_id=instance_id,
+            query_result = await self.query_engine.get_distinct_values(
+                instance_name=instance_id,
                 database_name=database_name,
                 collection_name=collection_name,
                 field=field,
-                filter_query=filter_query
+                query=filter_query
             )
+            
+            # 转换结果格式
+            if not query_result["success"]:
+                return {"error": query_result["error"]}
+            
+            result = {
+                "values": query_result["data"]["distinct_values"],
+                "count": query_result["data"]["count"],
+                "execution_time": query_result["data"]["execution_time"],
+                "limited": query_result["data"].get("limited", False)
+            }
             
             return result
             

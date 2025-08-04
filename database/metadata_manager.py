@@ -61,6 +61,15 @@ class MetadataManager:
             await collections['query_history'].create_index("session_id")
             await collections['query_history'].create_index("created_at")
             
+            # semantic_learning集合索引（用于语义学习历史）
+            await collections['semantic_learning'].create_index("instance_id")
+            await collections['semantic_learning'].create_index("created_at")
+            await collections['semantic_learning'].create_index([
+                ("instance_id", 1), 
+                ("database_name", 1), 
+                ("collection_name", 1)
+            ])
+            
             logger.info("实例元数据索引创建完成", instance=instance_name)
             
         except Exception as e:
@@ -85,7 +94,8 @@ class MetadataManager:
                 'databases': metadata_db['databases'],
                 'collections': metadata_db['collections'],
                 'fields': metadata_db['fields'],
-                'query_history': metadata_db['query_history']
+                'query_history': metadata_db['query_history'],
+                'semantic_learning': metadata_db['semantic_learning']
             }
             
             # 为该实例创建索引
@@ -441,6 +451,34 @@ class MetadataManager:
         # 搜索字段
         field_cursor = collections['fields'].find(search_filter)
         results["fields"] = await field_cursor.to_list(length=None)
+        
+        return results
+    
+    async def search_fields_by_meaning(self, target_instance_name: str, search_term: str) -> List[Dict[str, Any]]:
+        """根据业务含义搜索字段"""
+        collections = self._get_instance_collections(target_instance_name)
+        if not collections:
+            raise ValueError(f"实例 {target_instance_name} 的元数据库不可用")
+        
+        # 构建搜索条件：在字段路径、业务含义、示例中搜索
+        search_filter = {
+            "$or": [
+                {"field_path": {"$regex": search_term, "$options": "i"}},
+                {"business_meaning": {"$regex": search_term, "$options": "i"}},
+                {"examples": {"$in": [{"$regex": search_term, "$options": "i"}]}}
+            ]
+        }
+        
+        # 执行搜索
+        field_cursor = collections['fields'].find(search_filter)
+        results = await field_cursor.to_list(length=None)
+        
+        logger.info(
+            "语义字段搜索完成",
+            target_instance=target_instance_name,
+            search_term=search_term,
+            results_count=len(results)
+        )
         
         return results
     

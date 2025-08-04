@@ -68,21 +68,27 @@ QueryNest是一个基于MCP (Model Context Protocol) 的MongoDB多实例查询�
 
 ### 🚀 快速开始
 
-#### 自动部署（推荐）
+#### 快速启动（推荐）
 
-使用自动部署脚本一键安装：
+使用uvx快速启动服务：
 
 ```bash
-python deploy.py
+# 安装uv工具（如果尚未安装）
+pip install uv
+
+# 从项目目录启动（推荐）
+cd /path/to/QueryNest
+uvx --from . --no-cache querynest-mcp
+
+# 或从任何位置启动
+uvx --from /path/to/QueryNest --no-cache querynest-mcp
 ```
 
-部署脚本会自动：
-- 检查Python环境
-- 安装依赖包
-- 创建目录结构
-- 设置配置文件
-- 验证环境
-- 创建启动脚本
+uvx启动的优势：
+- 自动处理依赖关系
+- 无需预安装包到环境
+- 使用隔离的执行环境
+- 自动缓存加速后续启动
 
 #### 手动安装
 
@@ -94,34 +100,29 @@ cd QueryNest
 
 2. **安装依赖**
 ```bash
+cd QueryNest
 pip install -r requirements.txt
 ```
 
 3. **配置服务**
 ```bash
 # 复制配置模板
-cp config.yaml.example config.yaml
-cp .env.example .env
+cp config.example.yaml config.yaml
 
-# 编辑配置文件
-vim config.yaml
-vim .env
+# 编辑配置文件（根据实际环境修改MongoDB连接字符串）
+vim config.yaml  # 或使用您喜欢的编辑器
 ```
 
 4. **启动服务**
 ```bash
-# 开发模式
-python -m src.mcp_server --config config.yaml --log-level DEBUG
+# 开发模式（直接运行）
+python mcp_server.py --log-level DEBUG
 
-# 生产模式
-python -m src.mcp_server --config config.yaml
+# 生产模式（使用uvx，推荐）
+uvx --from . --no-cache querynest-mcp
 
-# 或使用启动脚本
-# Windows
-start.bat
-
-# Unix/Linux
-./start.sh
+# 设置配置文件路径（如果需要）
+export QUERYNEST_CONFIG_PATH=/path/to/config.yaml
 ```
 
 #### Docker 部署
@@ -139,96 +140,87 @@ docker-compose down
 
 ## ⚙️ 配置说明
 
-### 🔌 Trae IDE 中的 MCP 服务配置
+### 🔌 MCP 客户端配置
 
-服务启动后，需要在 Trae IDE 中配置 QueryNest MCP 服务以实现智能数据库查询功能。
+服务启动后，可以在支持MCP协议的AI客户端中配置QueryNest服务以实现智能数据库查询功能。
 
-#### 1. 创建可 uvx 安装的包
+#### 1. 项目结构
 
-QueryNest 已经配置为可通过 uvx 安装的包，项目包含以下关键文件：
+QueryNest 已经配置为可通过 uvx 运行的包，项目包含以下关键文件：
 
-**pyproject.toml** - 包配置文件：
-```toml
-[build-system]
-requires = ["setuptools>=61.0", "wheel"]
-build-backend = "setuptools.build_meta"
-
-[project]
-name = "querynest"
-version = "1.0.0"
-description = "MongoDB多实例查询服务 - MCP服务器"
-authors = [{name = "niuzaishu", email = "niuzaishu@example.com"}]
-license = {text = "MIT"}
-requires-python = ">=3.8"
-dependencies = [
-    "mcp>=1.0.0",
-    "pymongo>=4.0.0",
-    "fastapi>=0.100.0",
-    "uvicorn>=0.20.0",
-    "pydantic>=2.0.0",
-    "pyyaml>=6.0",
-    "structlog>=23.0.0",
-    "nltk>=3.8",
-    "scikit-learn>=1.3.0",
-    "numpy>=1.24.0",
-    "python-dotenv>=1.0.0"
-]
-
-[project.scripts]
-querynest-mcp = "src.mcp_server:cli_main"
+**setup.py** - 包配置文件：
+```python
+setup(
+    name="querynest",
+    version="1.0.0",
+    description="QueryNest MCP MongoDB查询服务",
+    py_modules=["mcp_server", "config"],
+    packages=["database", "scanner", "mcp_tools", "utils"],
+    entry_points={
+        "console_scripts": [
+            "querynest-mcp=mcp_server:cli_main",
+        ]
+    },
+)
 ```
 
-**入口点配置** - 在 `src/mcp_server.py` 中定义了 CLI 入口：
+**入口点配置** - 在 `mcp_server.py` 中定义了 CLI 入口：
 ```python
 def cli_main():
     """命令行入口点"""
+    # 自动查找配置文件并设置环境
+    # 支持从不同目录启动
     asyncio.run(main())
 
 if __name__ == "__main__":
     cli_main()
 ```
 
-#### 2. 本地通过 uvx 安装和运行
+#### 2. 本地运行步骤
 
 **步骤 1：安装 uv 工具**
 
-首先安装 uv 工具（如果尚未安装）：
+如果尚未安装uv，可通过以下方式安装：
 
-```powershell
-# Windows (PowerShell)
-irm https://astral.sh/uv/install.ps1 | iex
+```bash
+# 使用pip安装（推荐）
+pip install uv
+
+# 或使用官方安装脚本（Linux/macOS）
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows PowerShell
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
 
 # 验证安装
-uv --version
 uvx --version
 ```
 
-**步骤 2：本地测试运行**
+**步骤 2：启动服务**
 
-在项目根目录下测试 uvx 运行：
+在项目根目录下运行：
 
 ```bash
-# 方式一：从本地项目安装并运行
-uvx --from . querynest-mcp
+# 推荐方式：从项目目录运行
+cd /path/to/QueryNest
+uvx --from . --no-cache querynest-mcp
 
-# 方式二：指定 Python 版本
-uvx --from . --python 3.11 querynest-mcp
-
-# 方式三：查看帮助信息
-uvx --from . querynest-mcp --help
+# 或设置环境变量指定配置文件
+export QUERYNEST_CONFIG_PATH=/path/to/QueryNest/config.yaml
+uvx --from /path/to/QueryNest --no-cache querynest-mcp
 ```
 
 **步骤 3：验证服务启动**
 
 服务启动成功后，您应该看到类似以下的日志输出：
-```
-[INFO] QueryNest MCP Server starting...
-[INFO] MongoDB instances discovered: 2
-[INFO] MCP Server ready on stdio transport
-[INFO] Available tools: discover_instances, discover_databases, analyze_collection, generate_query, confirm_query
+```json
+{"event": "Starting QueryNest MCP server initialization", "config_path": "/path/to/config.yaml"}
+{"event": "Configuration loaded successfully", "instances_count": 2}
+{"event": "MCP tools initialized successfully", "tools_count": 13}
+{"event": "Starting stdio MCP server"}
 ```
 
-#### 3. Trae 配置说明
+#### 3. MCP客户端集成
 
 **uvx 工作原理：**
 
@@ -237,19 +229,19 @@ uvx 是一个现代的 Python 包执行工具，它可以：
 - 管理临时虚拟环境
 - 执行包的入口点命令
 
-**配置要点：**
+**MCP 客户端配置要点：**
 
-由于 uvx 可以直接从项目目录安装和运行包，Trae IDE 的 MCP 配置变得非常简洁：
+对于支持MCP协议的AI客户端，QueryNest 的配置示例：
 
 ```json
 {
   "mcpServers": {
     "QueryNest": {
       "command": "uvx",
-      "args": ["--from", ".", "querynest-mcp"],
-      "cwd": "项目根目录路径",
+      "args": ["--from", "/path/to/QueryNest", "--no-cache", "querynest-mcp"],
+      "cwd": "/path/to/QueryNest",
       "env": {
-        "QUERYNEST_CONFIG_PATH": "config.yaml",
+        "QUERYNEST_CONFIG_PATH": "/path/to/QueryNest/config.yaml",
         "QUERYNEST_LOG_LEVEL": "INFO"
       }
     }
@@ -257,16 +249,34 @@ uvx 是一个现代的 Python 包执行工具，它可以：
 }
 ```
 
+**Windows 配置示例：**
+
+```json
+{
+  "mcpServers": {
+    "QueryNest": {
+      "command": "uvx",
+      "args": ["--from", "C:\\path\\to\\QueryNest", "--no-cache", "querynest-mcp"],
+      "cwd": "C:\\path\\to\\QueryNest",
+      "env": {
+        "QUERYNEST_CONFIG_PATH": "C:\\path\\to\\QueryNest\\config.yaml"
+      }
+    }
+  }
+}
+```
+
 **关键配置说明：**
-- `--from .`: 表示从当前工作目录安装包
-- `cwd`: 设置为 QueryNest 项目的根目录
-- `querynest-mcp`: 在 pyproject.toml 中定义的入口点命令
+- `--from /path/to/QueryNest`: 指定项目绝对路径
+- `--no-cache`: 确保使用最新代码
+- `cwd`: 设置工作目录为项目根目录
+- `querynest-mcp`: 在 setup.py 中定义的入口点命令
 
 **优势：**
-1. **无需绝对路径**: uvx 使用相对路径 `.` 从当前目录安装
+1. **项目路径明确**: 使用绝对路径确保找到正确的项目
 2. **自动依赖管理**: uvx 自动处理所有依赖包
 3. **隔离环境**: 每次运行都在独立的临时环境中
-4. **跨平台兼容**: Windows、Linux、Mac 使用相同配置
+4. **配置文件自动发现**: 服务器会自动查找配置文件
 
 #### 4. 故障排除
 
@@ -274,45 +284,71 @@ uvx 是一个现代的 Python 包执行工具，它可以：
 
 **问题 1：uvx 命令不存在**
 ```bash
-# 解决方案：重新安装 uv
-irm https://astral.sh/uv/install.ps1 | iex
+# 解决方案：安装uv工具
+pip install uv
+
+# 或使用官方安装脚本
+curl -LsSf https://astral.sh/uv/install.sh | sh  # Linux/macOS
+# powershell -c "irm https://astral.sh/uv/install.ps1 | iex"  # Windows
 
 # 验证安装
 uvx --version
 ```
 
-**问题 2：包安装失败**
+**问题 2：配置文件未找到**
 ```bash
-# 检查项目结构
-ls -la pyproject.toml
-ls -la src/mcp_server.py
+# 检查配置文件是否存在
+ls -la config.yaml
 
-# 手动测试安装
-uvx --from . querynest-mcp --help
+# 从示例创建配置文件
+cp config.example.yaml config.yaml
+
+# 设置环境变量
+export QUERYNEST_CONFIG_PATH=/path/to/QueryNest/config.yaml
 ```
 
 **问题 3：MCP 服务连接失败**
-- 检查 `.trae/mcp.json` 文件格式
-- 确认项目路径是否正确
+- 检查 MCP 客户端配置文件格式
+- 确认项目路径是否正确（使用绝对路径）
 - 验证 MongoDB 服务是否运行
 - 检查配置文件 `config.yaml` 是否存在
 
-**问题 4：路径相关问题**
-- Windows: 使用双反斜杠 `\\` 转义
-- Linux/Mac: 使用正斜杠 `/`
-- 确保路径中没有特殊字符
-- 检查文件夹权限
+**问题 4：MongoDB连接失败**
+```bash
+# 检查MongoDB服务状态
+python scripts/check_db.py
+
+# 手动测试MongoDB连接
+python -c "
+from pymongo import MongoClient
+client = MongoClient('mongodb://localhost:27017/')
+print('MongoDB连接成功')
+"
+
+# 检查MongoDB服务是否运行
+# Linux/macOS
+sudo systemctl status mongod
+# Windows
+net start | findstr -i mongo
+```
 
 **验证配置成功：**
 ```bash
 # 测试本地运行
-uvx --from . querynest-mcp --help
+cd /path/to/QueryNest
+uvx --from . --no-cache querynest-mcp --help
 
-# 检查包结构
-ls -la pyproject.toml src/
+# 检查项目结构
+ls -la setup.py mcp_server.py config.yaml
 
 # 验证入口点
-python -c "from src.mcp_server import cli_main; print('Entry point OK')"
+python -c "
+from mcp_server import cli_main
+print('Entry point OK')
+"
+
+# 测试完整启动流程
+uvx --from . --no-cache querynest-mcp --log-level INFO
 ```
 
 
@@ -730,7 +766,10 @@ python -m pytest tests/ --cov=src --cov-report=html
 
 ```bash
 # 验证启动环境
-python -c "from src.utils.config_validator import validate_startup_environment; print(validate_startup_environment())"
+python -c "
+from utils.startup_validator import validate_startup_environment
+print(validate_startup_environment())
+"
 ```
 
 ## 📚 文档
@@ -784,7 +823,11 @@ mongo --host <host> --port <port> -u <username> -p
 #### 4. 配置文件错误
 ```bash
 # 验证配置文件
-python -c "from src.utils.config_validator import ConfigValidator; validator = ConfigValidator(); print(validator.validate_config_file('config.yaml'))"
+python -c "
+from utils.config_validator import ConfigValidator
+validator = ConfigValidator()
+print(validator.validate_config_file('config.yaml'))
+"
 ```
 
 ### 环境变量配置
@@ -802,38 +845,58 @@ QueryNest 支持以下环境变量：
 | `MONGO_TEST_PASSWORD` | 测试环境MongoDB密码 | - | `your_password` |
 | `MONGO_DEV_PASSWORD` | 开发环境MongoDB密码 | - | `your_password` |
 
-**使用示例：**
+**Linux/macOS 示例：**
 ```bash
 # 设置配置文件路径
-export QUERYNEST_CONFIG_PATH=/path/to/config.yaml
+export QUERYNEST_CONFIG_PATH=/path/to/QueryNest/config.yaml
 
 # 设置日志级别
 export QUERYNEST_LOG_LEVEL=DEBUG
 
-# 启用HTTP模式
-export QUERYNEST_MCP_TRANSPORT=http
-export QUERYNEST_MCP_HOST=0.0.0.0
-export QUERYNEST_MCP_PORT=8000
+# MCP传输模式（目前仅支持stdio）
+export QUERYNEST_MCP_TRANSPORT=stdio
+```
+
+**Windows 示例：**
+```cmd
+# CMD
+set QUERYNEST_CONFIG_PATH=C:\path\to\QueryNest\config.yaml
+set QUERYNEST_LOG_LEVEL=DEBUG
+
+# PowerShell
+$env:QUERYNEST_CONFIG_PATH="C:\path\to\QueryNest\config.yaml"
+$env:QUERYNEST_LOG_LEVEL="DEBUG"
 ```
 
 #### 5. 依赖包问题
 ```bash
+cd /path/to/QueryNest
+
 # 重新安装依赖
 pip install -r requirements.txt --force-reinstall
 
 # 检查Python版本
 python --version
+
+# 检查关键包安装状态
+pip list | grep -E "(mcp|pymongo|motor)"
 ```
 
-#### 6. 权限问题
+#### 6. 权限和路径问题
 ```bash
-# 检查文件权限
-ls -la config.yaml
-ls -la logs/
+# 检查文件是否存在
+ls -la config.yaml mcp_server.py
 
-# 修复权限
+# 检查目录权限
+ls -ld . logs/
+
+# 修复权限（如果需要）
+chmod 755 .
 chmod 644 config.yaml
-chmod 755 logs/
+chmod +x mcp_server.py
+
+# 创建日志目录（如果不存在）
+mkdir -p logs/
 ```
 
 ### 日志分析

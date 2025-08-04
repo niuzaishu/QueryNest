@@ -26,6 +26,11 @@ share/python-wheels/
 *.egg
 MANIFEST
 
+# QueryNest specific build artifacts
+querynest.egg-info/
+build/
+*.egg-info
+
 # PyInstaller
 #  Usually these files are written by a python script from a template
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
@@ -272,4 +277,42 @@ miniconda/
 .vscode/extensions.json
 
 # 项目特定的忽略文件
-# 添加您项目特定的文件和目录
+# QueryNest 临时和重复文件
+*_complete.py
+*_working.py
+*_debug.py
+*_minimal.py
+*_simple.*
+*_test.py
+test_*.py
+verify_*.py
+simulate_*.py
+check_*.py
+
+# 启动脚本临时文件
+start_mcp.py
+install.py
+deploy.py
+
+# 配置文件副本
+pyproject_*.toml
+config_*.yaml
+
+# 运行时生成的文件
+*.pid
+*.sock
+nohup.out
+
+# 数据库转储和备份
+*.dump
+*.bson
+*.json.gz
+
+# MCP 调试文件
+mcp_debug_*.log
+transport_*.log
+
+# 性能分析和监控
+*.perf
+*.flame
+monitoring_data/

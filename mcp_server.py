@@ -30,7 +30,12 @@ from mcp_tools import (
     QueryGenerationTool,
     QueryConfirmationTool,
     FeedbackTools,
+    WorkflowStatusTool,
+    WorkflowResetTool,
 )
+from mcp_tools.semantic_feedback import QueryFeedbackSemanticTool
+from mcp_tools.semantic_confirmation import SemanticConfirmationTool
+from utils.workflow_wrapper import WorkflowConstrainedTool
 
 
 # 配置日志
@@ -122,47 +127,67 @@ class QueryNestMCPServer:
             raise
     
     async def _initialize_tools(self):
-        """初始化MCP工具"""
-        # 实例发现工具
+        """初始化MCP工具（带工作流约束）"""
+        # 创建原始工具实例
         instance_discovery = InstanceDiscoveryTool(self.connection_manager, self.metadata_manager)
-        self.tools["discover_instances"] = instance_discovery
-        
-        # 数据库发现工具
         database_discovery = DatabaseDiscoveryTool(self.connection_manager, self.metadata_manager)
-        self.tools["discover_databases"] = database_discovery
-        
-        # 集合分析工具
         collection_analysis = CollectionAnalysisTool(
             self.connection_manager, self.metadata_manager, self.semantic_analyzer
         )
-        self.tools["analyze_collection"] = collection_analysis
-        
-        # 语义管理工具
         semantic_management = SemanticManagementTool(
             self.connection_manager, self.metadata_manager, self.semantic_analyzer
         )
-        self.tools["manage_semantics"] = semantic_management
-        
-        # 语义补全工具
         semantic_completion = SemanticCompletionTool(
             self.connection_manager, self.metadata_manager, self.semantic_analyzer
         )
-        self.tools["semantic_completion"] = semantic_completion
-        
-        # 查询生成工具
         query_generation = QueryGenerationTool(
             self.connection_manager, self.metadata_manager, self.semantic_analyzer
         )
-        self.tools["generate_query"] = query_generation
-        
-        # 查询确认工具
         query_confirmation = QueryConfirmationTool(
             self.connection_manager, self.metadata_manager, self.query_engine
         )
-        self.tools["confirm_query"] = query_confirmation
-        
-        # 反馈工具
         feedback_tool = FeedbackTools(self.metadata_manager)
+        
+        # 工作流管理工具
+        workflow_status = WorkflowStatusTool()
+        workflow_reset = WorkflowResetTool()
+        
+        # 包装主要工具以添加工作流约束
+        self.tools["discover_instances"] = WorkflowConstrainedTool(
+            instance_discovery, "discover_instances"
+        )
+        self.tools["discover_databases"] = WorkflowConstrainedTool(
+            database_discovery, "discover_databases"
+        )
+        self.tools["analyze_collection"] = WorkflowConstrainedTool(
+            collection_analysis, "analyze_collection"
+        )
+        self.tools["generate_query"] = WorkflowConstrainedTool(
+            query_generation, "generate_query"
+        )
+        self.tools["confirm_query"] = WorkflowConstrainedTool(
+            query_confirmation, "confirm_query"
+        )
+        
+        # 工具链管理和状态工具（不需要包装）
+        self.tools["workflow_status"] = workflow_status
+        self.tools["workflow_reset"] = workflow_reset
+        
+        # 辅助工具（可选择性包装或直接使用）
+        self.tools["manage_semantics"] = semantic_management
+        self.tools["semantic_completion"] = semantic_completion
+        
+        # 新增语义增强工具
+        semantic_feedback_tool = QueryFeedbackSemanticTool(
+            self.connection_manager, self.metadata_manager, self.semantic_analyzer
+        )
+        semantic_confirmation_tool = SemanticConfirmationTool(
+            self.connection_manager, self.metadata_manager, self.semantic_analyzer
+        )
+        self.tools["query_feedback_semantic"] = semantic_feedback_tool
+        self.tools["semantic_confirmation"] = semantic_confirmation_tool
+        
+        # 反馈工具（保持原样）
         self.tools["submit_feedback"] = feedback_tool
         self.tools["get_feedback_status"] = feedback_tool
         self.tools["get_help_content"] = feedback_tool
@@ -200,7 +225,15 @@ class QueryNestMCPServer:
                     raise ValueError(f"未知工具: {name}")
                 
                 tool_instance = self.tools[name]
-                result = await tool_instance.execute(arguments)
+                
+                # 检查是否为工作流包装的工具
+                if isinstance(tool_instance, WorkflowConstrainedTool):
+                    # 工作流包装工具需要session_id
+                    session_id = arguments.get("session_id", "default")
+                    result = await tool_instance.execute(arguments, session_id)
+                else:
+                    # 普通工具
+                    result = await tool_instance.execute(arguments)
                 
                 logger.info("工具调用完成", tool_name=name, result_count=len(result))
                 return result
@@ -315,10 +348,12 @@ def cli_main():
     possible_roots = [
         Path.cwd(),  # 当前工作目录
         Path(__file__).parent,  # mcp_server.py 所在目录
-        Path("C:/Users/zaishu.niu/PycharmProjects/QueryNest"),  # 硬编码路径作为后备
+        Path("C:/my/QueryNest"),  # 更新的项目路径
+        Path("C:/Users/zaishu.niu/PycharmProjects/QueryNest"),  # 原路径作为后备
     ]
     
     # 查找配置文件并设置环境变量
+    config_found = False
     for root in possible_roots:
         config_file = root / "config.yaml"
         if config_file.exists():
@@ -332,7 +367,17 @@ def cli_main():
             if str(root) not in sys.path:
                 sys.path.insert(0, str(root))
                 logger.info(f"Added to Python path: {root}")
+            config_found = True
             break
+    
+    # 如果没有找到配置文件，但用户可能通过命令行参数或环境变量指定了路径
+    if not config_found:
+        custom_config = os.environ.get('QUERYNEST_CONFIG_PATH')
+        if custom_config and Path(custom_config).exists():
+            logger.info(f"Using custom config from environment: {custom_config}")
+            config_found = True
+        else:
+            logger.warning("Config file not found in standard locations. Will attempt to use command line arguments or environment variables.")
     
     try:
         asyncio.run(main())

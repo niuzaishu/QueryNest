@@ -12,6 +12,13 @@ from database.connection_manager import ConnectionManager
 from database.metadata_manager import MetadataManager
 from scanner.semantic_analyzer import SemanticAnalyzer
 from mcp_tools.semantic_completion import SemanticCompletionTool
+from utils.parameter_validator import (
+    ParameterValidator, MCPParameterHelper, ValidationResult,
+    is_non_empty_string, is_positive_integer, is_boolean, 
+    is_valid_instance_id, is_valid_database_name, is_valid_collection_name,
+    validate_instance_exists, validate_database_exists, validate_collection_exists
+)
+from utils.tool_context import get_context_manager, ToolExecutionContext
 
 
 logger = structlog.get_logger(__name__)
@@ -29,6 +36,8 @@ class QueryGenerationTool:
         self.semantic_completion = SemanticCompletionTool(
             connection_manager, metadata_manager, semantic_analyzer
         )
+        self.context_manager = get_context_manager()
+        self.validator = self._setup_validator()
         
         # 查询模式映射
         self.query_patterns = {
@@ -109,14 +118,167 @@ class QueryGenerationTool:
                         "type": "boolean",
                         "description": "是否包含查询解释",
                         "default": True
+                    },
+                    "output_format": {
+                        "type": "string",
+                        "enum": ["full", "query_only", "executable"],
+                        "description": "输出格式：full=完整解释，query_only=仅查询语句，executable=可直接执行的语句",
+                        "default": "full"
                     }
                 },
                 "required": ["instance_id", "database_name", "collection_name", "query_description"]
             }
         )
     
+    def _setup_validator(self) -> ParameterValidator:
+        """设置参数验证器"""
+        validator = ParameterValidator()
+        
+        async def get_instance_options():
+            """获取可用实例选项"""
+            try:
+                instances = await self.connection_manager.get_all_instances()
+                return [{'value': instance_id, 'display_name': instance_id, 
+                        'description': instance_config.description or '无描述'} 
+                       for instance_id, instance_config in instances.items()]
+            except Exception:
+                return []
+        
+        async def get_database_options(context):
+            """获取可用数据库选项"""
+            try:
+                if not context or not context.instance_id:
+                    return []
+                
+                connection = self.connection_manager.get_instance_connection(context.instance_id)
+                if not connection:
+                    return []
+                
+                db_names = await connection.client.list_database_names()
+                # 过滤系统数据库
+                system_dbs = {'admin', 'local', 'config'}
+                user_dbs = [name for name in db_names if name not in system_dbs]
+                
+                return [{'value': db_name, 'display_name': db_name,
+                        'description': f'数据库: {db_name}'} for db_name in user_dbs]
+            except Exception:
+                return []
+        
+        async def get_collection_options(context):
+            """获取可用集合选项"""
+            try:
+                if not context or not context.instance_id or not context.database_name:
+                    return []
+                
+                connection = self.connection_manager.get_instance_connection(context.instance_id)
+                if not connection:
+                    return []
+                
+                db = connection.client[context.database_name]
+                collection_names = await db.list_collection_names()
+                
+                return [{'value': coll_name, 'display_name': coll_name,
+                        'description': f'集合: {coll_name}'} for coll_name in collection_names]
+            except Exception:
+                return []
+        
+        # 设置验证规则
+        validator.add_required_parameter(
+            name="instance_id",
+            type_check=lambda x: is_non_empty_string(x) and is_valid_instance_id(x),
+            validator=lambda x, ctx: validate_instance_exists(x, ctx.connection_manager),
+            options_provider=get_instance_options,
+            description="MongoDB实例标识符",
+            user_friendly_name="MongoDB实例"
+        )
+        
+        validator.add_required_parameter(
+            name="database_name",
+            type_check=lambda x: is_non_empty_string(x) and is_valid_database_name(x),
+            validator=validate_database_exists,
+            options_provider=get_database_options,
+            description="数据库名称",
+            user_friendly_name="数据库"
+        )
+        
+        validator.add_required_parameter(
+            name="collection_name",
+            type_check=lambda x: is_non_empty_string(x) and is_valid_collection_name(x),
+            validator=validate_collection_exists,
+            options_provider=get_collection_options,
+            description="集合名称",
+            user_friendly_name="集合"
+        )
+        
+        validator.add_required_parameter(
+            name="query_description",
+            type_check=is_non_empty_string,
+            description="查询的自然语言描述，例如：'查找所有状态为激活的用户'",
+            user_friendly_name="查询描述"
+        )
+        
+        validator.add_optional_parameter(
+            name="query_type",
+            type_check=lambda x: x in ["auto", "find", "count", "aggregate", "distinct"],
+            description="查询类型，auto表示自动识别",
+            user_friendly_name="查询类型"
+        )
+        
+        validator.add_optional_parameter(
+            name="limit",
+            type_check=lambda x: is_positive_integer(x) and 1 <= x <= 1000,
+            description="结果限制数量，范围1-1000",
+            user_friendly_name="结果数量限制"
+        )
+        
+        validator.add_optional_parameter(
+            name="include_explanation",
+            type_check=is_boolean,
+            description="是否包含查询解释",
+            user_friendly_name="包含解释"
+        )
+        
+        validator.add_optional_parameter(
+            name="output_format",
+            type_check=lambda x: x in ["full", "query_only", "executable"],
+            description="输出格式选择",
+            user_friendly_name="输出格式"
+        )
+        
+        return validator
+
     async def execute(self, arguments: Dict[str, Any]) -> List[TextContent]:
         """执行查询生成"""
+        # 参数验证和智能补全
+        context = self.context_manager.get_or_create_context()
+        context.connection_manager = self.connection_manager
+        
+        # 尝试从上下文推断缺失参数
+        inferred_params = context.infer_missing_parameters()
+        for param_name in ["instance_id", "database_name", "collection_name"]:
+            if not arguments.get(param_name) and inferred_params.get(param_name):
+                arguments[param_name] = inferred_params[param_name]
+                logger.info(f"从上下文推断{param_name}", value=arguments[param_name])
+        
+        # 更新上下文以支持数据库和集合选项的获取
+        if arguments.get("instance_id"):
+            context = context.clone_with_updates(instance_id=arguments["instance_id"])
+        if arguments.get("database_name"):
+            context = context.clone_with_updates(database_name=arguments["database_name"])
+        
+        validation_result, errors = await self.validator.validate_parameters(arguments, context)
+        
+        if validation_result != ValidationResult.VALID:
+            return MCPParameterHelper.create_error_response(errors)
+        
+        # 记录工具调用到上下文并更新上下文
+        context.add_to_chain("generate_query", arguments)
+        self.context_manager.update_context(
+            instance_id=arguments["instance_id"],
+            database_name=arguments["database_name"],
+            collection_name=arguments["collection_name"]
+        )
+        
         instance_id = arguments["instance_id"]
         database_name = arguments["database_name"]
         collection_name = arguments["collection_name"]
@@ -124,6 +286,7 @@ class QueryGenerationTool:
         query_type = arguments.get("query_type", "auto")
         limit = arguments.get("limit", 100)
         include_explanation = arguments.get("include_explanation", True)
+        output_format = arguments.get("output_format", "full")
         
         logger.info(
             "开始生成查询",
@@ -166,7 +329,7 @@ class QueryGenerationTool:
             # 构建结果
             result_text = await self._build_query_result(
                 query_result, query_description, instance_id, database_name, 
-                collection_name, include_explanation, query_analysis
+                collection_name, include_explanation, query_analysis, output_format
             )
             
             # 保存查询历史
@@ -904,8 +1067,24 @@ class QueryGenerationTool:
     
     async def _build_query_result(self, query_result: Dict[str, Any], query_description: str,
                                 instance_id: str, database_name: str, collection_name: str,
-                                include_explanation: bool, analysis: Dict[str, Any] = None) -> str:
+                                include_explanation: bool, analysis: Dict[str, Any] = None, 
+                                output_format: str = "full") -> str:
         """构建查询结果文本"""
+        query_type = query_result["query_type"]
+        mongodb_query = query_result["mongodb_query"]
+        
+        # 生成可执行的MongoDB查询语句
+        executable_query = self._generate_executable_query(query_type, collection_name, mongodb_query)
+        
+        # 根据输出格式返回不同内容
+        if output_format == "executable":
+            return executable_query
+        elif output_format == "query_only":
+            result_text = f"**查询类型**: {query_type.upper()}\n\n"
+            result_text += f"```javascript\n{executable_query}\n```"
+            return result_text
+        
+        # 默认完整格式
         result_text = f"## 查询生成结果\n\n"
         result_text += f"**查询描述**: {query_description}\n\n"
         
@@ -922,63 +1101,11 @@ class QueryGenerationTool:
                     result_text += f"- **{field_path}** (置信度: {confidence:.2f}) - {reason}\n"
                 result_text += "\n"
         
-        query_type = query_result["query_type"]
-        mongodb_query = query_result["mongodb_query"]
-        
         result_text += f"### 生成的MongoDB查询\n\n"
         result_text += f"**查询类型**: {query_type.upper()}\n\n"
         
-        # 显示MongoDB查询语句
-        if query_type == "find":
-            filter_query = mongodb_query.get("filter", {})
-            sort_query = mongodb_query.get("sort")
-            limit_query = mongodb_query.get("limit")
-            
-            result_text += f"```javascript\n"
-            result_text += f"db.{collection_name}.find(\n"
-            result_text += f"  {json.dumps(filter_query, indent=2, ensure_ascii=False, default=str)}\n"
-            result_text += f")"
-            
-            if sort_query:
-                result_text += f".sort({json.dumps(sort_query, ensure_ascii=False)})"
-            
-            if limit_query:
-                result_text += f".limit({limit_query})"
-            
-            result_text += f"\n```\n\n"
-            
-        elif query_type == "count":
-            filter_query = mongodb_query.get("filter", {})
-            
-            result_text += f"```javascript\n"
-            result_text += f"db.{collection_name}.countDocuments(\n"
-            result_text += f"  {json.dumps(filter_query, indent=2, ensure_ascii=False, default=str)}\n"
-            result_text += f")\n"
-            result_text += f"```\n\n"
-            
-        elif query_type == "aggregate":
-            pipeline = mongodb_query.get("pipeline", [])
-            
-            result_text += f"```javascript\n"
-            result_text += f"db.{collection_name}.aggregate([\n"
-            for i, stage in enumerate(pipeline):
-                result_text += f"  {json.dumps(stage, indent=2, ensure_ascii=False, default=str)}"
-                if i < len(pipeline) - 1:
-                    result_text += ","
-                result_text += "\n"
-            result_text += f"])\n"
-            result_text += f"```\n\n"
-            
-        elif query_type == "distinct":
-            field = mongodb_query.get("field")
-            filter_query = mongodb_query.get("filter", {})
-            
-            result_text += f"```javascript\n"
-            result_text += f"db.{collection_name}.distinct(\n"
-            result_text += f"  \"{field}\",\n"
-            result_text += f"  {json.dumps(filter_query, indent=2, ensure_ascii=False, default=str)}\n"
-            result_text += f")\n"
-            result_text += f"```\n\n"
+        # 显示可执行的MongoDB查询语句
+        result_text += f"```javascript\n{executable_query}\n```\n\n"
         
         # 查询解释
         if include_explanation:
@@ -986,11 +1113,56 @@ class QueryGenerationTool:
         
         # 使用建议
         result_text += f"### 使用建议\n\n"
-        result_text += f"- 使用 `confirm_query` 工具执行此查询并查看结果\n"
+        result_text += f"- 可直接复制上述查询语句到MongoDB shell或客户端中执行\n"
+        result_text += f"- 使用 `confirm_query` 工具在系统中执行此查询并查看结果\n"
         result_text += f"- 如果查询结果不符合预期，可以调整查询描述重新生成\n"
         result_text += f"- 对于大数据集，建议先使用 count 查询确认结果数量\n"
         
         return result_text
+    
+    def _generate_executable_query(self, query_type: str, collection_name: str, mongodb_query: Dict[str, Any]) -> str:
+        """生成可直接执行的MongoDB查询语句"""
+        if query_type == "find":
+            filter_query = mongodb_query.get("filter", {})
+            sort_query = mongodb_query.get("sort")
+            limit_query = mongodb_query.get("limit")
+            
+            query_str = f"db.{collection_name}.find("
+            query_str += json.dumps(filter_query, ensure_ascii=False, default=str, separators=(',', ':'))
+            query_str += ")"
+            
+            if sort_query:
+                query_str += f".sort({json.dumps(sort_query, ensure_ascii=False, separators=(',', ':'))})"
+            
+            if limit_query:
+                query_str += f".limit({limit_query})"
+            
+            return query_str
+            
+        elif query_type == "count":
+            filter_query = mongodb_query.get("filter", {})
+            query_str = f"db.{collection_name}.countDocuments("
+            query_str += json.dumps(filter_query, ensure_ascii=False, default=str, separators=(',', ':'))
+            query_str += ")"
+            return query_str
+            
+        elif query_type == "aggregate":
+            pipeline = mongodb_query.get("pipeline", [])
+            query_str = f"db.{collection_name}.aggregate("
+            query_str += json.dumps(pipeline, ensure_ascii=False, default=str, separators=(',', ':'))
+            query_str += ")"
+            return query_str
+            
+        elif query_type == "distinct":
+            field = mongodb_query.get("field")
+            filter_query = mongodb_query.get("filter", {})
+            query_str = f"db.{collection_name}.distinct("
+            query_str += f'"{field}", '
+            query_str += json.dumps(filter_query, ensure_ascii=False, default=str, separators=(',', ':'))
+            query_str += ")"
+            return query_str
+        
+        return f"// 不支持的查询类型: {query_type}"
     
     async def _generate_query_explanation(self, query_result: Dict[str, Any], query_description: str) -> str:
         """生成查询解释"""

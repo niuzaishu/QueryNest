@@ -7,6 +7,11 @@ from mcp.types import Tool, TextContent
 
 from database.connection_manager import ConnectionManager
 from database.metadata_manager import MetadataManager
+from utils.parameter_validator import (
+    ParameterValidator, MCPParameterHelper, ValidationResult,
+    is_boolean
+)
+from utils.tool_context import get_context_manager, ToolExecutionContext
 
 
 logger = structlog.get_logger(__name__)
@@ -18,6 +23,8 @@ class InstanceDiscoveryTool:
     def __init__(self, connection_manager: ConnectionManager, metadata_manager: MetadataManager):
         self.connection_manager = connection_manager
         self.metadata_manager = metadata_manager
+        self.context_manager = get_context_manager()
+        self.validator = self._setup_validator()
     
     def get_tool_definition(self) -> Tool:
         """获取工具定义"""
@@ -42,8 +49,40 @@ class InstanceDiscoveryTool:
             }
         )
     
+    def _setup_validator(self) -> ParameterValidator:
+        """设置参数验证器"""
+        validator = ParameterValidator()
+        
+        validator.add_optional_parameter(
+            name="include_health",
+            type_check=is_boolean,
+            description="是否包含实例健康状态信息",
+            user_friendly_name="包含健康状态"
+        )
+        
+        validator.add_optional_parameter(
+            name="include_stats",
+            type_check=is_boolean,
+            description="是否包含实例统计信息",
+            user_friendly_name="包含统计信息"
+        )
+        
+        return validator
+
     async def execute(self, arguments: Dict[str, Any]) -> List[TextContent]:
         """执行实例发现"""
+        # 参数验证
+        context = self.context_manager.get_or_create_context()
+        context.connection_manager = self.connection_manager
+        
+        validation_result, errors = await self.validator.validate_parameters(arguments, context)
+        
+        if validation_result != ValidationResult.VALID:
+            return MCPParameterHelper.create_error_response(errors)
+        
+        # 记录工具调用到上下文
+        context.add_to_chain("discover_instances", arguments)
+        
         include_health = arguments.get("include_health", True)
         include_stats = arguments.get("include_stats", False)
         
