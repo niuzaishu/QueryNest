@@ -8,7 +8,7 @@ from .semantic_management import SemanticManagementTool
 from .semantic_completion import SemanticCompletionTool
 from .query_generation import QueryGenerationTool
 from .query_confirmation import QueryConfirmationTool
-from .feedback_tools import FeedbackTools
+# from .feedback_tools import FeedbackTools  # 已移除
 from .workflow_management import WorkflowStatusTool, WorkflowResetTool
 
 __all__ = [
@@ -19,7 +19,7 @@ __all__ = [
     "SemanticCompletionTool",
     "QueryGenerationTool",
     "QueryConfirmationTool",
-    "FeedbackTools",
+    # "FeedbackTools",  # 已移除
     "WorkflowStatusTool",
     "WorkflowResetTool"
 ]

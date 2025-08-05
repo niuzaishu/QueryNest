@@ -29,7 +29,7 @@ from mcp_tools import (
     SemanticCompletionTool,
     QueryGenerationTool,
     QueryConfirmationTool,
-    FeedbackTools,
+    # FeedbackTools,  # 已移除
     WorkflowStatusTool,
     WorkflowResetTool,
 )
@@ -38,7 +38,7 @@ from mcp_tools.semantic_confirmation import SemanticConfirmationTool
 from utils.workflow_wrapper import WorkflowConstrainedTool
 
 
-# 配置日志
+# 配置日志 - 初步配置，将在initialize方法中根据配置文件进一步设置
 structlog.configure(
     processors=[
         structlog.stdlib.filter_by_level,
@@ -62,6 +62,110 @@ logger = structlog.get_logger(__name__)
 
 class QueryNestMCPServer:
     """QueryNest MCP服务器"""
+    
+    def _setup_file_logging(self, config: QueryNestConfig):
+        """设置文件日志输出"""
+        import logging
+        import logging.handlers
+        from pathlib import Path
+        import yaml
+        
+        try:
+            # 尝试从原始配置数据中读取日志配置
+            config_data = {}
+            try:
+                with open(self.config_path, 'r', encoding='utf-8') as f:
+                    config_data = yaml.safe_load(f)
+            except Exception:
+                logger.warning("无法读取配置文件，使用默认日志配置")
+                return
+            
+            logging_config = config_data.get('logging', {})
+            output_config = logging_config.get('output', {})
+            file_config = output_config.get('file', {})
+            
+            # 检查是否启用文件日志
+            if not file_config.get('enabled', False):
+                logger.info("文件日志未启用")
+                return
+            
+            # 创建日志目录
+            log_path_str = file_config.get('path', 'logs/querynest.log')
+            log_path = Path(log_path_str)
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            # 获取根日志记录器
+            root_logger = logging.getLogger()
+            
+            # 设置日志级别
+            log_level_str = logging_config.get('level', 'INFO')
+            log_level = getattr(logging, log_level_str.upper(), logging.INFO)
+            root_logger.setLevel(log_level)
+            
+            # 检查是否已有文件处理器
+            has_file_handler = any(
+                isinstance(handler, logging.handlers.RotatingFileHandler) 
+                for handler in root_logger.handlers
+            )
+            
+            if not has_file_handler:
+                # 创建文件处理器
+                max_size_str = file_config.get('max_size', '100MB')
+                max_size_bytes = self._parse_size(max_size_str)
+                backup_count = file_config.get('backup_count', 5)
+                
+                file_handler = logging.handlers.RotatingFileHandler(
+                    filename=str(log_path),
+                    maxBytes=max_size_bytes,
+                    backupCount=backup_count,
+                    encoding='utf-8'
+                )
+                
+                # 设置文件处理器级别
+                file_log_level_str = file_config.get('level', 'DEBUG')
+                file_log_level = getattr(logging, file_log_level_str.upper(), logging.DEBUG)
+                file_handler.setLevel(file_log_level)
+                
+                # 创建格式化器
+                log_format = logging_config.get('format', 'json')
+                if log_format == "json":
+                    # JSON格式 - 使用structlog的JSON格式化器
+                    formatter = logging.Formatter('%(message)s')
+                else:
+                    # 文本格式
+                    formatter = logging.Formatter(
+                        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                        datefmt='%Y-%m-%d %H:%M:%S'
+                    )
+                
+                file_handler.setFormatter(formatter)
+                root_logger.addHandler(file_handler)
+                
+                logger.info(
+                    "文件日志配置完成", 
+                    log_path=str(log_path), 
+                    level=file_log_level_str,
+                    max_size=max_size_str,
+                    backup_count=backup_count
+                )
+                
+        except Exception as e:
+            logger.warning("文件日志配置失败", error=str(e))
+    
+    def _parse_size(self, size_str: str) -> int:
+        """解析大小字符串为字节数"""
+        size_str = size_str.upper()
+        if size_str.endswith('KB'):
+            return int(size_str[:-2]) * 1024
+        elif size_str.endswith('MB'):
+            return int(size_str[:-2]) * 1024 * 1024
+        elif size_str.endswith('GB'):
+            return int(size_str[:-2]) * 1024 * 1024 * 1024
+        else:
+            try:
+                return int(size_str)
+            except ValueError:
+                return 100 * 1024 * 1024  # 默认100MB
     
     def __init__(self, config_path: str = "config.yaml"):
         self.config_path = config_path
@@ -89,6 +193,9 @@ class QueryNestMCPServer:
             # 加载配置
             self.config = QueryNestConfig.from_yaml(self.config_path)
             logger.info("Configuration loaded successfully", instances_count=len(self.config.mongo_instances))
+            
+            # 设置文件日志
+            self._setup_file_logging(self.config)
             
             # 初始化连接管理器
             self.connection_manager = ConnectionManager(self.config)
@@ -146,7 +253,7 @@ class QueryNestMCPServer:
         query_confirmation = QueryConfirmationTool(
             self.connection_manager, self.metadata_manager, self.query_engine
         )
-        feedback_tool = FeedbackTools(self.metadata_manager)
+        # feedback_tool = FeedbackTools(self.metadata_manager)  # 已移除
         
         # 工作流管理工具
         workflow_status = WorkflowStatusTool()
@@ -188,12 +295,13 @@ class QueryNestMCPServer:
         self.tools["semantic_confirmation"] = semantic_confirmation_tool
         
         # 反馈工具（保持原样）
-        self.tools["submit_feedback"] = feedback_tool
-        self.tools["get_feedback_status"] = feedback_tool
-        self.tools["get_help_content"] = feedback_tool
-        self.tools["get_faq"] = feedback_tool
-        self.tools["search_help"] = feedback_tool
-        self.tools["get_feedback_summary"] = feedback_tool
+        # 反馈工具已移除
+        # self.tools["submit_feedback"] = feedback_tool
+        # self.tools["get_feedback_status"] = feedback_tool
+        # self.tools["get_help_content"] = feedback_tool
+        # self.tools["get_faq"] = feedback_tool
+        # self.tools["search_help"] = feedback_tool
+        # self.tools["get_feedback_summary"] = feedback_tool
     
     def _register_handlers(self):
         """注册MCP处理器"""

@@ -42,7 +42,7 @@ class BaseIntegrationTest:
         self.db = self.client[TEST_DB_CONFIG["database"]]
         
         # 初始化组件
-        from src.config import MongoInstanceConfig, MetadataConfig
+        from config import MongoInstanceConfig, MetadataConfig
         self.config = QueryNestConfig(
             mongo_instances={
                 TEST_INSTANCE_CONFIG["instance_id"]: MongoInstanceConfig(

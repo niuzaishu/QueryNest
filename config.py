@@ -37,8 +37,13 @@ class MongoInstanceConfig(BaseModel):
 
 class MetadataConfig(BaseModel):
     """元数据库配置"""
-    database: str = Field(default="querynest_metadata", description="元数据库名称")
-    # 注意：每个实例都会创建独立的querynest_metadata库，不再需要单独的连接字符串
+    database_name: str = Field(default="querynest_metadata", description="元数据库名称")
+    collections: Optional[Dict[str, str]] = Field(default=None, description="集合名称配置")
+    
+    @property
+    def database(self) -> str:
+        """为向后兼容提供database属性"""
+        return self.database_name
     
 
 class SecurityConfig(BaseModel):
@@ -98,6 +103,7 @@ class LoggingConfig(BaseModel):
 class QueryNestConfig(BaseSettings):
     """QueryNest主配置"""
     mongo_instances: Dict[str, MongoInstanceConfig] = Field(default={}, description="MongoDB实例字典")
+    metadata: MetadataConfig = Field(default_factory=MetadataConfig, description="元数据配置")
     security: SecurityConfig = Field(default_factory=SecurityConfig, description="安全配置")
     mcp: MCPConfig = Field(default_factory=MCPConfig, description="MCP服务配置")
     cache: Optional[Dict[str, Any]] = Field(default=None, description="缓存配置")

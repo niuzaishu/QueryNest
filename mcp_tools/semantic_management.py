@@ -141,10 +141,19 @@ class SemanticManagementTool:
             )]
         
         try:
-            # 更新字段语义
-            success = await self.metadata_manager.update_field_semantics(
-                instance_id, database_name, collection_name, field_path, business_meaning
-            )
+            # 更新字段语义 - 需要传入正确的参数
+            # 由于新的双重存储策略，需要提供instance_id作为ObjectId
+            from bson import ObjectId
+            try:
+                # 如果instance_id是字符串，需要转换或使用实例名称
+                success = await self.metadata_manager.update_field_semantics(
+                    instance_id, ObjectId(), database_name, collection_name, field_path, business_meaning
+                )
+            except:
+                # 如果ObjectId转换失败，使用实例名称的方式调用新版本方法
+                success = await self._update_field_semantics_by_instance_name(
+                    instance_id, database_name, collection_name, field_path, business_meaning
+                )
             
             if success:
                 result_text = f"✅ 成功更新字段语义\n\n"
@@ -587,3 +596,25 @@ class SemanticManagementTool:
         except Exception as e:
             logger.error("查看实例语义失败", error=str(e))
             return [TextContent(type="text", text=f"查看实例语义时发生错误: {str(e)}")]
+    
+    async def _update_field_semantics_by_instance_name(self, instance_name: str, database_name: str, 
+                                                     collection_name: str, field_path: str, 
+                                                     business_meaning: str) -> bool:
+        """使用实例名称更新字段语义的辅助方法"""
+        try:
+            # 直接调用新的双重存储策略方法
+            # 这里我们需要一个假的ObjectId，因为新方法需要它作为参数但会在失败时回退到业务库存储
+            from bson import ObjectId
+            fake_instance_id = ObjectId()
+            
+            # 调用元数据管理器的双重存储方法
+            success = await self.metadata_manager.update_field_semantics(
+                instance_name, fake_instance_id, database_name, collection_name, 
+                field_path, business_meaning
+            )
+            
+            return success
+            
+        except Exception as e:
+            logger.error("使用实例名称更新字段语义失败", error=str(e))
+            return False

@@ -41,12 +41,12 @@ class TestMCPToolsIntegration(BaseIntegrationTest):
         })
         
         # 初始化语义分析器
-        from src.scanner.semantic_analyzer import SemanticAnalyzer
+        from scanner.semantic_analyzer import SemanticAnalyzer
         self.semantic_analyzer = SemanticAnalyzer(self.metadata_manager)
         
         # 扫描数据库和集合信息到元数据库
-        from src.scanner.database_scanner import DatabaseScanner
-        from src.config import ScannerConfig
+        from scanner.database_scanner import DatabaseScanner  
+        from config import ScannerConfig
         
         # 创建扫描器配置
         scanner_config = ScannerConfig(

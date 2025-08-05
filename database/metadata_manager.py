@@ -345,39 +345,129 @@ class MetadataManager:
     async def update_field_semantics(self, target_instance_name: str, instance_id: ObjectId, database_name: str, 
                                    collection_name: str, field_path: str, 
                                    business_meaning: str, examples: List[str] = None) -> bool:
-        """更新字段业务语义"""
-        collections = self._get_instance_collections(target_instance_name)
-        if not collections:
-            raise ValueError(f"实例 {target_instance_name} 的元数据库不可用")
+        """更新字段业务语义，支持语义库和业务库双重存储策略"""
         
-        update_doc = {
-            "business_meaning": business_meaning,
-            "updated_at": datetime.now()
-        }
-        
-        if examples:
-            update_doc["examples"] = examples
-        
-        result = await collections['fields'].update_one(
-            {
-                "instance_id": instance_id,
-                "database_name": database_name,
-                "collection_name": collection_name,
-                "field_path": field_path
-            },
-            {"$set": update_doc}
+        # 尝试更新元数据库中的语义
+        metadata_success = await self._update_metadata_semantics(
+            target_instance_name, instance_id, database_name, collection_name, 
+            field_path, business_meaning, examples
         )
         
-        if result.modified_count > 0:
+        # 如果元数据库更新失败，尝试在业务库中存储语义
+        business_success = False
+        if not metadata_success:
+            business_success = await self._update_business_semantics(
+                target_instance_name, database_name, collection_name, 
+                field_path, business_meaning, examples
+            )
+        
+        result = metadata_success or business_success
+        
+        if result:
+            storage_type = "元数据库" if metadata_success else "业务库"
             logger.info(
-                "字段语义已更新",
-                instance_id=str(instance_id),
+                f"字段语义已更新至{storage_type}",
+                instance=target_instance_name,
                 database=database_name,
                 collection=collection_name,
-                field=field_path
+                field=field_path,
+                storage_type=storage_type
             )
+        
+        return result
+    
+    async def _update_metadata_semantics(self, target_instance_name: str, instance_id: ObjectId, 
+                                       database_name: str, collection_name: str, field_path: str, 
+                                       business_meaning: str, examples: List[str] = None) -> bool:
+        """在元数据库中更新字段语义"""
+        try:
+            collections = self._get_instance_collections(target_instance_name)
+            if not collections:
+                logger.warning("元数据库集合不可用", instance=target_instance_name)
+                return False
+            
+            update_doc = {
+                "business_meaning": business_meaning,
+                "updated_at": datetime.now()
+            }
+            
+            if examples:
+                update_doc["examples"] = examples
+            
+            result = await collections['fields'].update_one(
+                {
+                    "instance_id": instance_id,
+                    "database_name": database_name,
+                    "collection_name": collection_name,
+                    "field_path": field_path
+                },
+                {"$set": update_doc}
+            )
+            
+            return result.modified_count > 0
+            
+        except Exception as e:
+            logger.warning(
+                "元数据库语义更新失败，将尝试业务库存储",
+                instance=target_instance_name,
+                error=str(e)
+            )
+            return False
+    
+    async def _update_business_semantics(self, target_instance_name: str, database_name: str, 
+                                       collection_name: str, field_path: str, 
+                                       business_meaning: str, examples: List[str] = None) -> bool:
+        """在业务库中存储字段语义"""
+        try:
+            # 获取业务数据库连接
+            business_db = self.connection_manager.get_instance_database(target_instance_name, database_name)
+            if business_db is None:
+                logger.error("无法获取业务数据库连接", instance=target_instance_name, database=database_name)
+                return False
+            
+            # 在业务库中创建或更新语义集合
+            semantics_collection = business_db['_querynest_semantics']
+            
+            semantic_doc = {
+                "collection_name": collection_name,
+                "field_path": field_path,
+                "business_meaning": business_meaning,
+                "updated_at": datetime.now(),
+                "source": "querynest_analyzer"
+            }
+            
+            if examples:
+                semantic_doc["examples"] = examples
+            
+            # 使用 upsert 更新或插入语义信息
+            result = await semantics_collection.replace_one(
+                {
+                    "collection_name": collection_name,
+                    "field_path": field_path
+                },
+                semantic_doc,
+                upsert=True
+            )
+            
+            logger.info(
+                "字段语义已存储至业务库",
+                instance=target_instance_name,
+                database=database_name,
+                collection=collection_name,
+                field=field_path,
+                business_collection="_querynest_semantics"
+            )
+            
             return True
-        return False
+            
+        except Exception as e:
+            logger.error(
+                "业务库语义存储失败",
+                instance=target_instance_name,
+                database=database_name,
+                error=str(e)
+            )
+            return False
     
     # ==================== 查询历史管理 ====================
     
@@ -455,32 +545,148 @@ class MetadataManager:
         return results
     
     async def search_fields_by_meaning(self, target_instance_name: str, search_term: str) -> List[Dict[str, Any]]:
-        """根据业务含义搜索字段"""
+        """根据业务含义搜索字段，同时搜索元数据库和业务库"""
+        results = []
+        
+        # 首先尝试从元数据库搜索
+        try:
+            metadata_results = await self._search_metadata_semantics(target_instance_name, search_term)
+            results.extend(metadata_results)
+            logger.debug(f"元数据库搜索到 {len(metadata_results)} 条语义记录")
+        except Exception as e:
+            logger.warning("元数据库语义搜索失败", error=str(e))
+        
+        # 然后搜索各个业务库中的语义信息
+        try:
+            business_results = await self._search_business_semantics(target_instance_name, search_term)
+            results.extend(business_results)
+            logger.debug(f"业务库搜索到 {len(business_results)} 条语义记录")
+        except Exception as e:
+            logger.warning("业务库语义搜索失败", error=str(e))
+        
+        # 去重并返回
+        unique_results = self._deduplicate_semantic_results(results)
+        
+        logger.info(
+            "综合语义字段搜索完成",
+            target_instance=target_instance_name,
+            search_term=search_term,
+            total_results=len(unique_results),
+            metadata_count=len(metadata_results) if 'metadata_results' in locals() else 0,
+            business_count=len(business_results) if 'business_results' in locals() else 0
+        )
+        
+        return unique_results
+    
+    async def _search_metadata_semantics(self, target_instance_name: str, search_term: str) -> List[Dict[str, Any]]:
+        """在元数据库中搜索语义信息"""
         collections = self._get_instance_collections(target_instance_name)
         if not collections:
-            raise ValueError(f"实例 {target_instance_name} 的元数据库不可用")
+            return []
         
         # 构建搜索条件：在字段路径、业务含义、示例中搜索
         search_filter = {
             "$or": [
                 {"field_path": {"$regex": search_term, "$options": "i"}},
                 {"business_meaning": {"$regex": search_term, "$options": "i"}},
-                {"examples": {"$in": [{"$regex": search_term, "$options": "i"}]}}
+                {"examples": {"$elemMatch": {"$regex": search_term, "$options": "i"}}}
             ]
         }
         
-        # 执行搜索
         field_cursor = collections['fields'].find(search_filter)
         results = await field_cursor.to_list(length=None)
         
-        logger.info(
-            "语义字段搜索完成",
-            target_instance=target_instance_name,
-            search_term=search_term,
-            results_count=len(results)
-        )
+        # 为结果添加来源标记
+        for result in results:
+            result["semantic_source"] = "metadata_db"
         
         return results
+    
+    async def _search_business_semantics(self, target_instance_name: str, search_term: str) -> List[Dict[str, Any]]:
+        """在业务库中搜索语义信息"""
+        results = []
+        
+        # 获取实例的所有数据库
+        try:
+            # 这里需要从配置或连接管理器获取数据库列表
+            # 暂时使用一个简化的方式
+            instance_connection = self.connection_manager.get_instance_connection(target_instance_name)
+            if not instance_connection or not instance_connection.client:
+                return []
+            
+            # 获取所有数据库名称
+            database_names = await instance_connection.client.list_database_names()
+            
+            # 搜索每个数据库的语义集合
+            for db_name in database_names:
+                # 跳过系统数据库
+                if db_name in ['admin', 'config', 'local', 'querynest_metadata']:
+                    continue
+                
+                try:
+                    business_db = instance_connection.get_database(db_name)
+                    if business_db is None:
+                        continue
+                    
+                    # 检查是否存在语义集合
+                    collection_names = await business_db.list_collection_names()
+                    if '_querynest_semantics' not in collection_names:
+                        continue
+                    
+                    semantics_collection = business_db['_querynest_semantics']
+                    
+                    # 构建搜索条件 - 修复examples字段的搜索语法
+                    search_filter = {
+                        "$or": [
+                            {"field_path": {"$regex": search_term, "$options": "i"}},
+                            {"business_meaning": {"$regex": search_term, "$options": "i"}},
+                            {"examples": {"$elemMatch": {"$regex": search_term, "$options": "i"}}}
+                        ]
+                    }
+                    
+                    cursor = semantics_collection.find(search_filter)
+                    db_results = await cursor.to_list(length=None)
+                    
+                    # 为结果添加数据库信息和来源标记
+                    for result in db_results:
+                        result["database_name"] = db_name
+                        result["semantic_source"] = "business_db"
+                        # 确保有实例ID字段（兼容性）
+                        if "instance_id" not in result:
+                            result["instance_id"] = target_instance_name
+                        results.append(result)
+                        
+                except Exception as e:
+                    logger.debug(f"搜索业务库 {db_name} 语义信息时出错", error=str(e))
+                    continue
+        
+        except Exception as e:
+            logger.warning("获取业务库列表失败", error=str(e))
+        
+        return results
+    
+    def _deduplicate_semantic_results(self, results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """去重语义搜索结果，优先保留元数据库的记录"""
+        seen = set()
+        unique_results = []
+        
+        # 先处理元数据库的结果
+        for result in results:
+            if result.get("semantic_source") == "metadata_db":
+                key = (result.get("database_name", ""), result.get("collection_name", ""), result.get("field_path", ""))
+                if key not in seen:
+                    seen.add(key)
+                    unique_results.append(result)
+        
+        # 再处理业务库的结果，避免重复
+        for result in results:
+            if result.get("semantic_source") == "business_db":
+                key = (result.get("database_name", ""), result.get("collection_name", ""), result.get("field_path", ""))
+                if key not in seen:
+                    seen.add(key)
+                    unique_results.append(result)
+        
+        return unique_results
     
     async def get_statistics(self, target_instance_name: str) -> Dict[str, Any]:
         """获取统计信息"""

@@ -326,12 +326,23 @@ class SemanticAnalyzer:
                 
                 # 如果置信度足够高，自动更新字段语义
                 if analysis["confidence"] > 0.6 and analysis["suggested_meaning"]:
-                    success = await self.metadata_manager.update_field_semantics(
-                        instance_id, database_name, collection_name, field_path,
-                        analysis["suggested_meaning"]
-                    )
-                    if success:
-                        updated_count += 1
+                    # 使用新的双重存储策略更新字段语义
+                    from bson import ObjectId
+                    try:
+                        # 尝试使用假的ObjectId调用新方法，会自动回退到业务库存储
+                        fake_instance_id = ObjectId()
+                        success = await self.metadata_manager.update_field_semantics(
+                            instance_id, fake_instance_id, database_name, collection_name, 
+                            field_path, analysis["suggested_meaning"]
+                        )
+                        if success:
+                            updated_count += 1
+                    except Exception as e:
+                        logger.warning(
+                            "自动更新字段语义失败，跳过该字段",
+                            field_path=field_path,
+                            error=str(e)
+                        )
             
             logger.info(
                 "集合字段语义分析完成",

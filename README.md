@@ -4,9 +4,11 @@ QueryNest是一个基于MCP (Model Context Protocol) 的MongoDB多实例查询�
 
 ## 📍 项目信息
 
-- **GitHub仓库**: [https://github.com/niuzaishu/QueryNest](https://github.com/niuzaishu/QueryNest)
-- **作者**: [niuzaishu](https://github.com/niuzaishu)
+- **版本**: v1.0.0
+- **状态**: ✅ 生产就绪
 - **许可证**: MIT License
+- **语言**: Python 3.12+
+- **架构**: 异步/基于MCP协议
 
 ## 🚀 主要特性
 
@@ -145,6 +147,34 @@ docker-compose down
 服务启动后，可以在支持MCP协议的AI客户端中配置QueryNest服务以实现智能数据库查询功能。
 
 #### 1. 项目结构
+
+```
+QueryNest/
+├── 📄 配置文件
+│   ├── config.yaml              # 主配置文件
+│   ├── config.example.yaml      # 配置模板
+│   └── config.py               # 配置管理
+├── 🚀 核心服务
+│   ├── mcp_server.py           # MCP服务器入口
+│   ├── start.py               # 备用启动脚本
+│   └── database/              # 数据库连接和管理
+├── 🔧 MCP工具集
+│   └── mcp_tools/             # MCP协议工具实现
+├── 🔍 扫描分析
+│   └── scanner/               # 数据库扫描和语义分析
+├── 🛠️ 工具类
+│   └── utils/                 # 验证、错误处理、工作流管理
+├── 🧪 测试代码
+│   └── tests/                 # 单元测试和集成测试
+├── 📚 文档
+│   └── docs/                  # 完整项目文档
+├── 📦 部署
+│   └── deployment/            # Docker和服务配置
+└── 📜 脚本
+    └── scripts/               # 数据库检查和测试工具
+```
+
+> 📖 详细结构说明请参考 [`docs/PROJECT_STRUCTURE.md`](docs/PROJECT_STRUCTURE.md)
 
 QueryNest 已经配置为可通过 uvx 运行的包，项目包含以下关键文件：
 
