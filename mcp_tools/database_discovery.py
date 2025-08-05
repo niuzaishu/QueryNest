@@ -84,7 +84,7 @@ class DatabaseDiscoveryTool:
             type_check=lambda x: is_non_empty_string(x) and is_valid_instance_id(x),
             validator=lambda x, ctx: validate_instance_exists(x, ctx.connection_manager),
             options_provider=get_instance_options,
-            description="要探索的MongoDB实例标识符",
+            description="要探索的MongoDB实例名称（注意：参数名为instance_id但实际使用实例名称）",
             user_friendly_name="MongoDB实例"
         )
         

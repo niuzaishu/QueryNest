@@ -25,16 +25,13 @@ from mcp_tools import (
     InstanceDiscoveryTool,
     DatabaseDiscoveryTool,
     CollectionAnalysisTool,
-    SemanticManagementTool,
-    SemanticCompletionTool,
     QueryGenerationTool,
     QueryConfirmationTool,
     # FeedbackTools,  # 已移除
     WorkflowStatusTool,
     WorkflowResetTool,
 )
-from mcp_tools.semantic_feedback import QueryFeedbackSemanticTool
-from mcp_tools.semantic_confirmation import SemanticConfirmationTool
+from mcp_tools.unified_semantic_tool import UnifiedSemanticTool
 from utils.workflow_wrapper import WorkflowConstrainedTool
 
 
@@ -241,10 +238,8 @@ class QueryNestMCPServer:
         collection_analysis = CollectionAnalysisTool(
             self.connection_manager, self.metadata_manager, self.semantic_analyzer
         )
-        semantic_management = SemanticManagementTool(
-            self.connection_manager, self.metadata_manager, self.semantic_analyzer
-        )
-        semantic_completion = SemanticCompletionTool(
+        # 统一语义工具（替换原有的多个语义工具）
+        unified_semantic = UnifiedSemanticTool(
             self.connection_manager, self.metadata_manager, self.semantic_analyzer
         )
         query_generation = QueryGenerationTool(
@@ -280,19 +275,8 @@ class QueryNestMCPServer:
         self.tools["workflow_status"] = workflow_status
         self.tools["workflow_reset"] = workflow_reset
         
-        # 辅助工具（可选择性包装或直接使用）
-        self.tools["manage_semantics"] = semantic_management
-        self.tools["semantic_completion"] = semantic_completion
-        
-        # 新增语义增强工具
-        semantic_feedback_tool = QueryFeedbackSemanticTool(
-            self.connection_manager, self.metadata_manager, self.semantic_analyzer
-        )
-        semantic_confirmation_tool = SemanticConfirmationTool(
-            self.connection_manager, self.metadata_manager, self.semantic_analyzer
-        )
-        self.tools["query_feedback_semantic"] = semantic_feedback_tool
-        self.tools["semantic_confirmation"] = semantic_confirmation_tool
+        # 统一语义操作工具（替换原有的多个分散的语义工具）
+        self.tools["unified_semantic_operations"] = unified_semantic
         
         # 反馈工具（保持原样）
         # 反馈工具已移除

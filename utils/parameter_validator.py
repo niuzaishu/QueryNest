@@ -330,8 +330,9 @@ def is_valid_instance_id(value: Any) -> bool:
     """检查是否为有效的实例ID格式"""
     if not isinstance(value, str):
         return False
-    # 实例ID应该是字母、数字、下划线、连字符的组合
-    return bool(re.match(r'^[a-zA-Z0-9_-]+$', value))
+    # 实例ID可以包含字母、数字、下划线、连字符和Unicode字符（包括中文）
+    # 只要不是空字符串且不包含特殊控制字符即可
+    return bool(value.strip() and not re.search(r'[\x00-\x1f\x7f-\x9f]', value))
 
 
 def is_valid_database_name(value: Any) -> bool:
@@ -351,13 +352,13 @@ def is_valid_collection_name(value: Any) -> bool:
 
 
 # 异步验证函数示例
-async def validate_instance_exists(instance_id: str, connection_manager) -> Union[bool, str]:
+async def validate_instance_exists(instance_name: str, connection_manager) -> Union[bool, str]:
     """验证实例是否存在"""
     try:
-        if not connection_manager.has_instance(instance_id):
+        if not connection_manager.has_instance(instance_name):
             available_instances = list(connection_manager.get_all_instances().keys())
             if available_instances:
-                return f"实例 '{instance_id}' 不存在。可用实例: {', '.join(available_instances)}"
+                return f"实例 '{instance_name}' 不存在。可用实例: {', '.join(available_instances)}"
             else:
                 return "没有可用的MongoDB实例，请检查配置"
         return True

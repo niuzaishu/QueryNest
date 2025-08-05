@@ -33,7 +33,7 @@ class CollectionAnalysisTool:
                 "properties": {
                     "instance_id": {
                         "type": "string",
-                        "description": "MongoDB实例ID"
+                        "description": "MongoDB实例ID（注意：参数名为instance_id但实际使用实例名称）"
                     },
                     "database_name": {
                         "type": "string",

@@ -219,8 +219,8 @@ class WorkflowConstrainedTool:
             target_stage = None
             
             if self.tool_name == 'discover_instances':
-                # 实例分析完成，准备选择实例
-                target_stage = WorkflowStage.INSTANCE_SELECTION
+                # 实例发现完成，转换到实例分析阶段
+                target_stage = WorkflowStage.INSTANCE_ANALYSIS
             
             elif self.tool_name == 'discover_databases':
                 # 数据库分析完成，准备选择数据库

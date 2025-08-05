@@ -11,7 +11,7 @@ from mcp.types import Tool, TextContent
 from database.connection_manager import ConnectionManager
 from database.metadata_manager import MetadataManager
 from scanner.semantic_analyzer import SemanticAnalyzer
-from mcp_tools.semantic_completion import SemanticCompletionTool
+from mcp_tools.unified_semantic_tool import UnifiedSemanticTool
 from utils.parameter_validator import (
     ParameterValidator, MCPParameterHelper, ValidationResult,
     is_non_empty_string, is_positive_integer, is_boolean, 
@@ -33,7 +33,7 @@ class QueryGenerationTool:
         self.connection_manager = connection_manager
         self.metadata_manager = metadata_manager
         self.semantic_analyzer = semantic_analyzer
-        self.semantic_completion = SemanticCompletionTool(
+        self.unified_semantic = UnifiedSemanticTool(
             connection_manager, metadata_manager, semantic_analyzer
         )
         self.context_manager = get_context_manager()
@@ -188,7 +188,7 @@ class QueryGenerationTool:
             type_check=lambda x: is_non_empty_string(x) and is_valid_instance_id(x),
             validator=lambda x, ctx: validate_instance_exists(x, ctx.connection_manager),
             options_provider=get_instance_options,
-            description="MongoDB实例标识符",
+            description="MongoDB实例名称（注意：参数名为instance_id但实际使用实例名称）",
             user_friendly_name="MongoDB实例"
         )
         
@@ -503,16 +503,18 @@ class QueryGenerationTool:
                                      fields: List[Dict[str, Any]]) -> Dict[str, Any]:
         """尝试语义补全"""
         try:
-            # 调用语义补全工具
+            # 调用统一语义工具进行语义建议
             completion_args = {
-                "unknown_fields": unknown_fields,
+                "action": "suggest_semantics",
+                "instance_name": "default",  # 使用默认实例
                 "query_description": description,
+                "unknown_fields": unknown_fields,
                 "available_fields": [field.get("field_path", "") for field in fields],
                 "field_types": {field.get("field_path", ""): field.get("field_type", "string") 
                                for field in fields}
             }
             
-            result = await self.semantic_completion.execute(completion_args)
+            result = await self.unified_semantic.execute(completion_args)
             
             # 解析结果
             if result and len(result) > 0:
