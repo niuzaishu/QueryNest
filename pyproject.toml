@@ -29,7 +29,7 @@ querynest-mcp = "mcp_server:cli_main"
 
 [tool.setuptools]
 include-package-data = true
-py-modules = ["mcp_server", "config"]
+py-modules = ["mcp_server", "config", "start"]
 
 [tool.setuptools.packages.find]
 where = ["."]  

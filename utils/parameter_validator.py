@@ -356,7 +356,8 @@ async def validate_instance_exists(instance_name: str, connection_manager) -> Un
     """验证实例是否存在"""
     try:
         if not connection_manager.has_instance(instance_name):
-            available_instances = list(connection_manager.get_all_instances().keys())
+            available_instances_dict = await connection_manager.get_all_instances()
+            available_instances = list(available_instances_dict.keys())
             if available_instances:
                 return f"实例 '{instance_name}' 不存在。可用实例: {', '.join(available_instances)}"
             else:

@@ -101,7 +101,10 @@ class InstanceDiscoveryTool:
             result_text = "## 发现的MongoDB实例\n\n"
             
             for instance_id, instance_config in instances.items():
-                result_text += f"### 实例: {instance_id}\n"
+                # 显示实例的name字段作为标题，但保留instance_id作为标识符
+                display_name = getattr(instance_config, 'name', instance_id)
+                result_text += f"### 实例: {display_name}\n"
+                result_text += f"- **实例ID**: {instance_id}\n"
                 result_text += f"- **连接字符串**: {instance_config.connection_string}\n"
                 result_text += f"- **环境**: {instance_config.environment}\n"
                 result_text += f"- **状态**: {instance_config.status}\n"
@@ -135,6 +138,7 @@ class InstanceDiscoveryTool:
             result_text += "## 使用提示\n\n"
             result_text += "- 使用 `discover_databases` 工具来探索特定实例的数据库\n"
             result_text += "- 使用 `analyze_collection` 工具来分析集合结构\n"
+            result_text += f"- 可用的实例ID: {', '.join(instances.keys())}\n"
             result_text += "- 在查询时需要指定 `instance_id` 参数\n"
             
             logger.info("实例发现完成", instance_count=len(instances))

@@ -124,15 +124,19 @@ class ConnectionManager:
         
         # 初始化业务实例连接（不立即初始化元数据库）
         success_count = 0
-        for instance_config in self.config.get_active_instances():
+        for instance_key, instance_config in self.config.mongo_instances.items():
+            if instance_config.status != "active":
+                continue
+                
             connection = InstanceConnection(instance_config)
             if await connection.connect():
-                self.connections[instance_config.name] = connection
+                self.connections[instance_key] = connection  # 使用配置键名而非name字段
                 success_count += 1
             else:
                 logger.warning(
                     "实例连接失败，将跳过",
-                    instance_name=instance_config.name
+                    instance_name=instance_config.name,
+                    instance_key=instance_key
                 )
         
         if success_count == 0:
@@ -144,7 +148,7 @@ class ConnectionManager:
         
         logger.info(
             "MongoDB连接管理器初始化完成",
-            total_instances=len(self.config.get_active_instances()),
+            total_instances=len([i for i in self.config.mongo_instances.values() if i.status == "active"]),
             connected_instances=success_count
         )
         return True
