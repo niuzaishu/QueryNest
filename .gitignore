@@ -199,6 +199,14 @@ temp/
 *.tmp
 *.temp
 
+# 脚本文件
+scripts/
+
+# Claude AI 相关文件
+.claude/
+.promptx/
+CLAUDE.md
+
 # 缓存文件
 cache/
 *.cache

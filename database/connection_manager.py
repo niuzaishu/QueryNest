@@ -23,34 +23,76 @@ class InstanceConnection:
         self.last_health_check: Optional[datetime] = None
         self.is_healthy = False
         self._lock = asyncio.Lock()
+        self._connection_stats = {
+            'total_connections': 0,
+            'active_connections': 0,
+            'failed_connections': 0,
+            'last_connection_time': None
+        }
+    
+    def _get_optimal_pool_config(self) -> dict:
+        """获取最优连接池配置"""
+        # 根据环境和负载动态调整连接池大小
+        if self.config.environment == "production":
+            return {
+                "maxPoolSize": 20,
+                "minPoolSize": 5,
+                "maxIdleTimeMS": 30000,
+                "waitQueueTimeoutMS": 10000
+            }
+        elif self.config.environment == "staging":
+            return {
+                "maxPoolSize": 10,
+                "minPoolSize": 2,
+                "maxIdleTimeMS": 60000,
+                "waitQueueTimeoutMS": 5000
+            }
+        else:  # development
+            return {
+                "maxPoolSize": 5,
+                "minPoolSize": 1,
+                "maxIdleTimeMS": 120000,
+                "waitQueueTimeoutMS": 3000
+            }
     
     async def connect(self) -> bool:
         """连接到MongoDB实例"""
         async with self._lock:
+            if self.client is not None:
+                return True
+            
             try:
-                if self.client is None:
-                    self.client = AsyncIOMotorClient(
-                        self.config.connection_string,
-                        serverSelectionTimeoutMS=5000,
-                        connectTimeoutMS=5000,
-                        maxPoolSize=10,
-                        minPoolSize=1
-                    )
+                # 动态连接池配置
+                pool_config = self._get_optimal_pool_config()
+                
+                self.client = AsyncIOMotorClient(
+                    self.config.connection_string,
+                    serverSelectionTimeoutMS=5000,
+                    connectTimeoutMS=5000,
+                    **pool_config
+                )
                 
                 # 测试连接
                 await self.client.admin.command('ping')
                 self.is_healthy = True
                 self.last_health_check = datetime.now()
                 
+                # 更新连接统计
+                self._connection_stats['total_connections'] += 1
+                self._connection_stats['active_connections'] += 1
+                self._connection_stats['last_connection_time'] = datetime.now()
+                
                 logger.info(
                     "MongoDB实例连接成功",
                     instance_name=self.config.name,
-                    environment=self.config.environment
+                    environment=self.config.environment,
+                    pool_config=pool_config
                 )
                 return True
                 
             except (ConnectionFailure, ServerSelectionTimeoutError) as e:
                 self.is_healthy = False
+                self._connection_stats['failed_connections'] += 1
                 logger.error(
                     "MongoDB实例连接失败",
                     instance_name=self.config.name,
@@ -59,6 +101,7 @@ class InstanceConnection:
                 return False
             except Exception as e:
                 self.is_healthy = False
+                self._connection_stats['failed_connections'] += 1
                 logger.error(
                     "MongoDB实例连接异常",
                     instance_name=self.config.name,
@@ -73,6 +116,11 @@ class InstanceConnection:
                 self.client.close()
                 self.client = None
                 self.is_healthy = False
+                
+                # 更新连接统计
+                if self._connection_stats['active_connections'] > 0:
+                    self._connection_stats['active_connections'] -= 1
+                
                 logger.info("MongoDB实例连接已断开", instance_name=self.config.name)
     
     async def health_check(self) -> bool:
@@ -96,16 +144,32 @@ class InstanceConnection:
             return False
     
     def get_database(self, db_name: str) -> Optional[AsyncIOMotorDatabase]:
-        """获取数据库连接"""
+        """获取数据库连接（支持连接复用）"""
         if not self.is_healthy or self.client is None:
             return None
-        return self.client[db_name]
+        
+        # 连接复用：直接返回已存在的客户端数据库引用
+        database = self.client[db_name]
+        
+        # 记录数据库访问（可用于后续优化）
+        if not hasattr(self, '_db_access_count'):
+            self._db_access_count = {}
+        self._db_access_count[db_name] = self._db_access_count.get(db_name, 0) + 1
+        
+        return database
     
     def needs_health_check(self, interval_minutes: int = 5) -> bool:
         """检查是否需要健康检查"""
         if self.last_health_check is None:
             return True
         return datetime.now() - self.last_health_check > timedelta(minutes=interval_minutes)
+    
+    def get_connection_stats(self) -> dict:
+        """获取连接统计信息"""
+        stats = self._connection_stats.copy()
+        stats['db_access_count'] = getattr(self, '_db_access_count', {})
+        stats['pool_config'] = self._get_optimal_pool_config()
+        return stats
 
 
 class ConnectionManager:

@@ -1,0 +1,59 @@
+[
+  {
+    "test_name": "工具列表获取",
+    "success": true,
+    "message": "成功获取所有工具，共8个",
+    "details": {
+      "tools": [
+        "discover_instances",
+        "discover_databases",
+        "analyze_collection",
+        "generate_query",
+        "confirm_query",
+        "workflow_status",
+        "workflow_reset",
+        "unified_semantic_operations"
+      ]
+    }
+  },
+  {
+    "test_name": "实例发现",
+    "success": false,
+    "message": "实例发现结果格式异常",
+    "details": {
+      "content_preview": "工具执行失败: 'WorkflowManager' object has no attribute 'get_workflow_data'\n\n请检查参数或联系管理员。"
+    }
+  },
+  {
+    "test_name": "数据库发现",
+    "success": true,
+    "message": "成功发现实例 local_test 的数据库",
+    "details": {
+      "instance_id": "local_test",
+      "response_length": 156
+    }
+  },
+  {
+    "test_name": "集合分析",
+    "success": false,
+    "message": "集合分析结果格式异常",
+    "details": {
+      "content_preview": "## 🚫 工作流约束\n\n当前阶段 '初始化' 不允许调用工具 'analyze_collection'。\n该工具应在以下阶段调用: 分析集合\n\n### 📍 当前阶段\n**初始化** (进度: 0.0%)\n开始新的查询会话\n\n---\n\n💡 *提示: 使用 `workflow_status` 查看完整工作流状态*"
+    }
+  },
+  {
+    "test_name": "工作流管理",
+    "success": true,
+    "message": "工作流管理功能正常",
+    "details": {
+      "status_response": 888,
+      "reset_response": 235
+    }
+  },
+  {
+    "test_name": "统一语义操作",
+    "success": false,
+    "message": "统一语义操作测试失败: QueryNestError.__init__() got an unexpected keyword argument 'error_type'",
+    "details": {}
+  }
+]

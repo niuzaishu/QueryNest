@@ -84,9 +84,26 @@ class ParameterValidator:
         )
         self.add_rule(rule)
         
+    async def basic_validate(self, arguments: Dict[str, Any]) -> Tuple[ValidationResult, List[ValidationError]]:
+        """基础验证：仅检查必需参数的存在性"""
+        errors = []
+        
+        for rule_name, rule in self.rules.items():
+            if rule.required and arguments.get(rule_name) is None:
+                errors.append(ValidationError(
+                    parameter=rule_name,
+                    error_type=ValidationResult.MISSING_REQUIRED,
+                    message=f"缺少必需参数: {rule.user_friendly_name}",
+                    user_prompt=f"请提供 {rule.user_friendly_name}。{rule.description}"
+                ))
+        
+        if not errors:
+            return ValidationResult.VALID, []
+        return ValidationResult.MISSING_REQUIRED, errors
+    
     async def validate_parameters(self, arguments: Dict[str, Any], 
                                 context: Any = None) -> Tuple[ValidationResult, List[ValidationError]]:
-        """验证参数"""
+        """完整验证参数"""
         errors = []
         
         for rule_name, rule in self.rules.items():
@@ -317,8 +334,13 @@ def is_non_empty_string(value: Any) -> bool:
 
 
 def is_positive_integer(value: Any) -> bool:
-    """检查是否为正整数"""
-    return isinstance(value, int) and value > 0
+    """检查是否为正整数，支持字符串转换"""
+    try:
+        if isinstance(value, str):
+            value = int(value)
+        return isinstance(value, int) and value > 0
+    except (ValueError, TypeError):
+        return False
 
 
 def is_boolean(value: Any) -> bool:

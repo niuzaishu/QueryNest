@@ -7,6 +7,7 @@ from mcp.types import Tool, TextContent
 
 from utils.workflow_manager import get_workflow_manager, WorkflowStage
 from utils.parameter_validator import ParameterValidator, MCPParameterHelper, ValidationResult, is_string
+from utils.error_handler import with_error_handling, with_retry, RetryConfig
 
 logger = structlog.get_logger(__name__)
 
@@ -49,6 +50,8 @@ class WorkflowStatusTool:
             }
         )
     
+    @with_error_handling("工作流状态查询")
+    @with_retry(RetryConfig(max_attempts=2, base_delay=1.0))
     async def execute(self, arguments: Dict[str, Any]) -> List[TextContent]:
         """执行工作流状态查询"""
         # 参数验证
@@ -258,6 +261,8 @@ class WorkflowResetTool:
             }
         )
     
+    @with_error_handling("工作流重置")
+    @with_retry(RetryConfig(max_attempts=2, base_delay=1.0))
     async def execute(self, arguments: Dict[str, Any]) -> List[TextContent]:
         """执行工作流重置"""
         # 参数验证

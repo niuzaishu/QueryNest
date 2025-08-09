@@ -24,6 +24,14 @@ dependencies = [
     "tornado>=5.0"
 ]
 
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-mock>=3.10.0",
+    "pytest-cov>=4.0.0"
+]
+
 [project.scripts]
 querynest-mcp = "mcp_server:cli_main"
 

@@ -1,0 +1,24 @@
+{
+  "semantic_index": {
+    "用户姓名": [
+      {
+        "instance": "test_instance",
+        "database": "test_db",
+        "collection": "test_collection",
+        "field": "user.name",
+        "meaning": "用户姓名"
+      }
+    ]
+  },
+  "field_index": {
+    "user.name": [
+      {
+        "instance": "test_instance",
+        "database": "test_db",
+        "collection": "test_collection",
+        "meaning": "用户姓名"
+      }
+    ]
+  },
+  "last_updated": "2025-08-09T22:28:05.559976"
+}

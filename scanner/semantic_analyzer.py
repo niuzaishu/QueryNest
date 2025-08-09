@@ -5,8 +5,14 @@ import re
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
 import structlog
+import asyncio
+from bson import ObjectId
 
 from database.metadata_manager import MetadataManager
+from database.connection_manager import ConnectionManager
+from storage.local_semantic_storage import LocalSemanticStorage
+from storage.semantic_file_manager import SemanticFileManager
+from storage.config import get_config
 
 
 logger = structlog.get_logger(__name__)
@@ -15,8 +21,14 @@ logger = structlog.get_logger(__name__)
 class SemanticAnalyzer:
     """语义分析器"""
     
-    def __init__(self, metadata_manager: MetadataManager):
+    def __init__(self, metadata_manager: MetadataManager, connection_manager: ConnectionManager):
         self.metadata_manager = metadata_manager
+        self.connection_manager = connection_manager
+        
+        # 初始化本地存储
+        config = get_config()
+        self.local_storage = LocalSemanticStorage(config)
+        self.file_manager = SemanticFileManager(config)
         
         # 常见字段名称模式和对应的业务含义
         self.field_patterns = {
@@ -326,13 +338,10 @@ class SemanticAnalyzer:
                 
                 # 如果置信度足够高，自动更新字段语义
                 if analysis["confidence"] > 0.6 and analysis["suggested_meaning"]:
-                    # 使用新的双重存储策略更新字段语义
-                    from bson import ObjectId
                     try:
-                        # 尝试使用假的ObjectId调用新方法，会自动回退到业务库存储
-                        fake_instance_id = ObjectId()
-                        success = await self.metadata_manager.update_field_semantics(
-                            instance_id, fake_instance_id, database_name, collection_name, 
+                        # 使用新的本地存储保存字段语义
+                        success = await self.save_field_semantics(
+                            instance_id, ObjectId(), database_name, collection_name,
                             field_path, analysis["suggested_meaning"]
                         )
                         if success:
@@ -451,3 +460,75 @@ class SemanticAnalyzer:
         suggestions.sort(key=lambda x: x["relevance_score"], reverse=True)
         
         return suggestions[:10]  # 返回前10个最相关的字段
+    
+    async def save_field_semantics(self, instance_name: str, instance_id: ObjectId, 
+                                 database_name: str, collection_name: str, 
+                                 field_path: str, business_meaning: str, 
+                                 examples: List[str] = None) -> bool:
+        """保存字段语义信息"""
+        try:
+            success = False
+            
+            # 使用本地文件存储
+            semantic_data = {
+                'business_meaning': business_meaning,
+                'examples': examples or [],
+                'updated_at': datetime.now().isoformat(),
+                'source': 'semantic_analyzer'
+            }
+            
+            success = await self.local_storage.save_field_semantics(
+                instance_name, database_name, collection_name, 
+                field_path, semantic_data
+            )
+            
+            if success:
+                 self.logger.info(
+                     "字段语义已保存到本地文件",
+                     instance=instance_name,
+                     database=database_name,
+                     collection=collection_name,
+                     field=field_path,
+                     meaning=business_meaning
+                 )
+            
+            return success
+            
+        except Exception as e:
+             self.logger.error(
+                 "保存字段语义失败",
+                 instance=instance_name,
+                 database=database_name,
+                 collection=collection_name,
+                 field=field_path,
+                 error=str(e)
+             )
+             return False
+    
+    async def search_semantics(self, instance_name: str, search_term: str) -> List[Dict[str, Any]]:
+        """搜索语义信息"""
+        try:
+            results = []
+            
+            # 从本地文件搜索
+            results = await self.local_storage.search_semantics(
+                instance_name, search_term
+            )
+            
+            self.logger.info(
+                 "语义搜索完成",
+                 instance=instance_name,
+                 search_term=search_term,
+                 total_results_count=len(results)
+             )
+            
+            return results
+            
+        except Exception as e:
+             self.logger.error(
+                 "语义搜索失败",
+                 instance=instance_name,
+                 search_term=search_term,
+                 error=str(e)
+             )
+             return []

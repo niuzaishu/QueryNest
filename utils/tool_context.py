@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """工具执行上下文管理器"""
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
 
 
@@ -78,6 +78,62 @@ class ToolExecutionContext:
             inferred['collection_name'] = self.collection_name
         
         return inferred
+    
+    def smart_infer_parameters(self, required_params: List[str]) -> Dict[str, Any]:
+        """基于需求智能推断参数"""
+        inferred = {}
+        
+        for param in required_params:
+            if param == 'instance_id' and not inferred.get('instance_id'):
+                inferred['instance_id'] = self._infer_instance_id()
+            elif param == 'database_name' and not inferred.get('database_name'):
+                inferred['database_name'] = self._infer_database_name()
+            elif param == 'collection_name' and not inferred.get('collection_name'):
+                inferred['collection_name'] = self._infer_collection_name()
+        
+        return inferred
+    
+    def _infer_instance_id(self) -> Optional[str]:
+        """推断实例ID"""
+        # 优先从当前上下文
+        if self.instance_id:
+            return self.instance_id
+        
+        # 从工具链历史推断
+        for call in reversed(self.tool_chain):
+            instance_id = call.get('arguments', {}).get('instance_id')
+            if instance_id:
+                return instance_id
+        
+        return None
+    
+    def _infer_database_name(self) -> Optional[str]:
+        """推断数据库名称"""
+        # 优先从当前上下文
+        if self.database_name:
+            return self.database_name
+        
+        # 从工具链历史推断
+        for call in reversed(self.tool_chain):
+            database_name = call.get('arguments', {}).get('database_name')
+            if database_name:
+                return database_name
+        
+        return None
+    
+    def _infer_collection_name(self) -> Optional[str]:
+        """推断集合名称"""
+        # 优先从当前上下文
+        if self.collection_name:
+            return self.collection_name
+        
+        # 从工具链历史推断
+        for call in reversed(self.tool_chain):
+            collection_name = call.get('arguments', {}).get('collection_name')
+            if collection_name:
+                return collection_name
+        
+        return None
     
     def is_instance_context_available(self) -> bool:
         """检查是否有实例上下文"""

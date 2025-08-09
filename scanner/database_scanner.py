@@ -12,9 +12,9 @@ from datetime import datetime
 from bson import ObjectId
 from pymongo.errors import PyMongoError
 
-from ..database.connection_manager import ConnectionManager
-from ..database.metadata_manager import MetadataManager
-from ..config import ScannerConfig
+from database.connection_manager import ConnectionManager
+from database.metadata_manager import MetadataManager
+from config import ScannerConfig
 
 logger = logging.getLogger(__name__)
 

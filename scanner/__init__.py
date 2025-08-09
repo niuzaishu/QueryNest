@@ -3,8 +3,10 @@
 
 from .structure_scanner import StructureScanner
 from .semantic_analyzer import SemanticAnalyzer
+from .database_scanner import DatabaseScanner
 
 __all__ = [
     "StructureScanner",
-    "SemanticAnalyzer"
+    "SemanticAnalyzer",
+    "DatabaseScanner"
 ]

@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-错误处理和用户反馈机制
+统一错误处理和重试机制
 """
 
-import logging
+import asyncio
+import functools
+from typing import Any, Callable, Optional, Type, Union, List, Dict
+from datetime import datetime, timedelta
+import structlog
 import traceback
-from typing import Dict, Any, Optional, List
 from enum import Enum
-from datetime import datetime
 import json
+import logging
+
+logger = structlog.get_logger(__name__)
 
 
 class ErrorType(Enum):
@@ -34,188 +39,122 @@ class ErrorSeverity(Enum):
     CRITICAL = "critical"
 
 
+class ErrorCategory(Enum):
+    """错误分类"""
+    CONNECTION = "connection"
+    AUTHENTICATION = "authentication"
+    PERMISSION = "permission"
+    VALIDATION = "validation"
+    TIMEOUT = "timeout"
+    RESOURCE = "resource"
+    BUSINESS = "business"
+    SYSTEM = "system"
+    UNKNOWN = "unknown"
+
+
 class QueryNestError(Exception):
-    """QueryNest自定义异常基类"""
+    """QueryNest基础异常类"""
     
-    def __init__(
-        self,
-        message: str,
-        error_type: ErrorType,
-        severity: ErrorSeverity = ErrorSeverity.MEDIUM,
-        details: Optional[Dict[str, Any]] = None,
-        suggestions: Optional[List[str]] = None,
-        user_friendly_message: Optional[str] = None
-    ):
+    def __init__(self, message: str, category: ErrorCategory = ErrorCategory.UNKNOWN, 
+                 severity: ErrorSeverity = ErrorSeverity.MEDIUM, 
+                 details: Optional[dict] = None, cause: Optional[Exception] = None):
         super().__init__(message)
         self.message = message
-        self.error_type = error_type
+        self.category = category
         self.severity = severity
         self.details = details or {}
-        self.suggestions = suggestions or []
-        self.user_friendly_message = user_friendly_message or self._generate_user_friendly_message()
+        self.cause = cause
         self.timestamp = datetime.now()
-        self.error_id = self._generate_error_id()
+        self.trace_id = self._generate_trace_id()
     
-    def _generate_error_id(self) -> str:
-        """生成错误ID"""
+    def _generate_trace_id(self) -> str:
+        """生成追踪ID"""
         import uuid
         return str(uuid.uuid4())[:8]
     
-    def _generate_user_friendly_message(self) -> str:
-        """生成用户友好的错误消息"""
-        error_messages = {
-            ErrorType.CONNECTION_ERROR: "无法连接到数据库，请检查网络连接和数据库配置",
-            ErrorType.QUERY_ERROR: "查询执行失败，请检查查询语法和参数",
-            ErrorType.VALIDATION_ERROR: "输入数据验证失败，请检查输入格式",
-            ErrorType.PERMISSION_ERROR: "权限不足，无法执行此操作",
-            ErrorType.TIMEOUT_ERROR: "操作超时，请稍后重试或简化查询条件",
-            ErrorType.RESOURCE_ERROR: "系统资源不足，请稍后重试",
-            ErrorType.CONFIGURATION_ERROR: "系统配置错误，请联系管理员",
-            ErrorType.INTERNAL_ERROR: "系统内部错误，请联系技术支持",
-            ErrorType.USER_INPUT_ERROR: "输入内容有误，请检查并重新输入",
-            ErrorType.SEMANTIC_ERROR: "无法理解查询意图，请提供更具体的描述"
-        }
-        return error_messages.get(self.error_type, "发生未知错误，请联系技术支持")
-    
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict:
         """转换为字典格式"""
         return {
-            "error_id": self.error_id,
             "message": self.message,
-            "user_friendly_message": self.user_friendly_message,
-            "error_type": self.error_type.value,
+            "category": self.category.value,
             "severity": self.severity.value,
             "details": self.details,
-            "suggestions": self.suggestions,
-            "timestamp": self.timestamp.isoformat()
+            "timestamp": self.timestamp.isoformat(),
+            "trace_id": self.trace_id,
+            "cause": str(self.cause) if self.cause else None
         }
 
 
 class ConnectionError(QueryNestError):
     """连接错误"""
-    
-    def __init__(self, message: str, instance_id: str = None, **kwargs):
-        details = kwargs.get('details', {})
-        if instance_id:
-            details['instance_id'] = instance_id
-        
-        suggestions = [
-            "检查数据库服务是否正常运行",
-            "验证网络连接是否正常",
-            "确认数据库连接配置是否正确",
-            "检查防火墙设置"
-        ]
-        
-        super().__init__(
-            message=message,
-            error_type=ErrorType.CONNECTION_ERROR,
-            severity=ErrorSeverity.HIGH,
-            details=details,
-            suggestions=suggestions,
-            **kwargs
-        )
+    def __init__(self, message: str, details: Optional[dict] = None, cause: Optional[Exception] = None):
+        super().__init__(message, ErrorCategory.CONNECTION, ErrorSeverity.HIGH, details, cause)
 
 
-class QueryExecutionError(QueryNestError):
-    """查询执行错误"""
-    
-    def __init__(self, message: str, query: Dict[str, Any] = None, **kwargs):
-        details = kwargs.get('details', {})
-        if query:
-            details['query'] = query
-        
-        suggestions = [
-            "检查查询语法是否正确",
-            "验证字段名称是否存在",
-            "确认查询条件是否合理",
-            "尝试简化查询条件"
-        ]
-        
-        super().__init__(
-            message=message,
-            error_type=ErrorType.QUERY_ERROR,
-            severity=ErrorSeverity.MEDIUM,
-            details=details,
-            suggestions=suggestions,
-            **kwargs
-        )
+class AuthenticationError(QueryNestError):
+    """认证错误"""
+    def __init__(self, message: str, details: Optional[dict] = None, cause: Optional[Exception] = None):
+        super().__init__(message, ErrorCategory.AUTHENTICATION, ErrorSeverity.HIGH, details, cause)
 
 
 class ValidationError(QueryNestError):
     """验证错误"""
+    def __init__(self, message: str, details: Optional[dict] = None, cause: Optional[Exception] = None):
+        super().__init__(message, ErrorCategory.VALIDATION, ErrorSeverity.MEDIUM, details, cause)
+
+
+class TimeoutError(QueryNestError):
+    """超时错误"""
+    def __init__(self, message: str, details: Optional[dict] = None, cause: Optional[Exception] = None):
+        super().__init__(message, ErrorCategory.TIMEOUT, ErrorSeverity.MEDIUM, details, cause)
+
+
+class ConfigurationError(QueryNestError):
+    """配置错误"""
+    def __init__(self, message: str, details: Optional[dict] = None, cause: Optional[Exception] = None):
+        super().__init__(message, ErrorCategory.SYSTEM, ErrorSeverity.HIGH, details, cause)
+
+
+class ToolError(QueryNestError):
+    """工具执行错误"""
+    def __init__(self, message: str, tool_name: str, details: Optional[dict] = None, cause: Optional[Exception] = None):
+        details = details or {}
+        details["tool_name"] = tool_name
+        super().__init__(message, ErrorCategory.BUSINESS, ErrorSeverity.MEDIUM, details, cause)
+
+
+class RetryConfig:
+    """重试配置"""
     
-    def __init__(self, message: str, field: str = None, value: Any = None, **kwargs):
-        details = kwargs.get('details', {})
-        if field:
-            details['field'] = field
-        if value is not None:
-            details['value'] = str(value)
-        
-        suggestions = [
-            "检查输入数据格式是否正确",
-            "确认必填字段是否已提供",
-            "验证数据类型是否匹配"
+    def __init__(self, max_attempts: int = 3, base_delay: float = 1.0, 
+                 max_delay: float = 60.0, exponential_base: float = 2.0,
+                 jitter: bool = True, retryable_exceptions: Optional[List[Type[Exception]]] = None):
+        self.max_attempts = max_attempts
+        self.base_delay = base_delay
+        self.max_delay = max_delay
+        self.exponential_base = exponential_base
+        self.jitter = jitter
+        self.retryable_exceptions = retryable_exceptions or [
+            ConnectionError, TimeoutError, OSError, asyncio.TimeoutError
         ]
-        
-        super().__init__(
-            message=message,
-            error_type=ErrorType.VALIDATION_ERROR,
-            severity=ErrorSeverity.LOW,
-            details=details,
-            suggestions=suggestions,
-            **kwargs
-        )
-
-
-class PermissionError(QueryNestError):
-    """权限错误"""
     
-    def __init__(self, message: str, operation: str = None, resource: str = None, **kwargs):
-        details = kwargs.get('details', {})
-        if operation:
-            details['operation'] = operation
-        if resource:
-            details['resource'] = resource
+    def calculate_delay(self, attempt: int) -> float:
+        """计算延迟时间"""
+        delay = self.base_delay * (self.exponential_base ** (attempt - 1))
+        delay = min(delay, self.max_delay)
         
-        suggestions = [
-            "联系管理员获取相应权限",
-            "确认当前用户角色是否正确",
-            "检查资源访问策略"
-        ]
+        if self.jitter:
+            import random
+            delay *= (0.5 + random.random() * 0.5)  # 添加50%的随机抖动
         
-        super().__init__(
-            message=message,
-            error_type=ErrorType.PERMISSION_ERROR,
-            severity=ErrorSeverity.HIGH,
-            details=details,
-            suggestions=suggestions,
-            **kwargs
-        )
-
-
-class SemanticError(QueryNestError):
-    """语义理解错误"""
+        return delay
     
-    def __init__(self, message: str, user_intent: str = None, **kwargs):
-        details = kwargs.get('details', {})
-        if user_intent:
-            details['user_intent'] = user_intent
+    def should_retry(self, exception: Exception, attempt: int) -> bool:
+        """判断是否应该重试"""
+        if attempt >= self.max_attempts:
+            return False
         
-        suggestions = [
-            "请提供更具体的查询描述",
-            "尝试使用不同的表达方式",
-            "参考查询示例重新组织语言",
-            "指定具体的字段名称和条件"
-        ]
-        
-        super().__init__(
-            message=message,
-            error_type=ErrorType.SEMANTIC_ERROR,
-            severity=ErrorSeverity.LOW,
-            details=details,
-            suggestions=suggestions,
-            **kwargs
-        )
+        return any(isinstance(exception, exc_type) for exc_type in self.retryable_exceptions)
 
 
 class ErrorHandler:
@@ -459,6 +398,112 @@ class UserFeedbackCollector:
 # 全局错误处理器和反馈收集器实例
 error_handler = ErrorHandler()
 feedback_collector = UserFeedbackCollector()
+
+
+def with_error_handling(context: Optional[dict] = None):
+    """错误处理装饰器"""
+    def decorator(func: Callable) -> Callable:
+        if asyncio.iscoroutinefunction(func):
+            @functools.wraps(func)
+            async def async_wrapper(*args, **kwargs):
+                try:
+                    return await func(*args, **kwargs)
+                except Exception as e:
+                    qn_error = error_handler.handle_error(e, context)
+                    raise qn_error
+            return async_wrapper
+        else:
+            @functools.wraps(func)
+            def sync_wrapper(*args, **kwargs):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    qn_error = error_handler.handle_error(e, context)
+                    raise qn_error
+            return sync_wrapper
+    return decorator
+
+
+def with_retry(config: Optional[RetryConfig] = None):
+    """重试装饰器"""
+    retry_config = config or RetryConfig()
+    
+    def decorator(func: Callable) -> Callable:
+        if asyncio.iscoroutinefunction(func):
+            @functools.wraps(func)
+            async def async_wrapper(*args, **kwargs):
+                last_exception = None
+                
+                for attempt in range(1, retry_config.max_attempts + 1):
+                    try:
+                        return await func(*args, **kwargs)
+                    except Exception as e:
+                        last_exception = e
+                        
+                        if not retry_config.should_retry(e, attempt):
+                            break
+                        
+                        if attempt < retry_config.max_attempts:
+                            delay = retry_config.calculate_delay(attempt)
+                            logger.warning(
+                                f"函数 {func.__name__} 第 {attempt} 次尝试失败，{delay:.2f}秒后重试",
+                                error=str(e), attempt=attempt, max_attempts=retry_config.max_attempts
+                            )
+                            await asyncio.sleep(delay)
+                
+                # 所有重试都失败了
+                logger.error(
+                    f"函数 {func.__name__} 在 {retry_config.max_attempts} 次尝试后仍然失败",
+                    error=str(last_exception)
+                )
+                raise last_exception
+            
+            return async_wrapper
+        else:
+            @functools.wraps(func)
+            def sync_wrapper(*args, **kwargs):
+                last_exception = None
+                
+                for attempt in range(1, retry_config.max_attempts + 1):
+                    try:
+                        return func(*args, **kwargs)
+                    except Exception as e:
+                        last_exception = e
+                        
+                        if not retry_config.should_retry(e, attempt):
+                            break
+                        
+                        if attempt < retry_config.max_attempts:
+                            delay = retry_config.calculate_delay(attempt)
+                            logger.warning(
+                                f"函数 {func.__name__} 第 {attempt} 次尝试失败，{delay:.2f}秒后重试",
+                                error=str(e), attempt=attempt, max_attempts=retry_config.max_attempts
+                            )
+                            import time
+                            time.sleep(delay)
+                
+                # 所有重试都失败了
+                logger.error(
+                    f"函数 {func.__name__} 在 {retry_config.max_attempts} 次尝试后仍然失败",
+                    error=str(last_exception)
+                )
+                raise last_exception
+            
+            return sync_wrapper
+    
+    return decorator
+
+
+# 便捷的组合装饰器
+def with_error_handling_and_retry(error_context: Optional[dict] = None, 
+                                 retry_config: Optional[RetryConfig] = None):
+    """错误处理和重试组合装饰器"""
+    def decorator(func: Callable) -> Callable:
+        # 先应用重试，再应用错误处理
+        func = with_retry(retry_config)(func)
+        func = with_error_handling(error_context)(func)
+        return func
+    return decorator
 
 
 def handle_error(error: Exception, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:

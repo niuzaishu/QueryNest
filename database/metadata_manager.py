@@ -5,9 +5,13 @@ from typing import Dict, List, Optional, Any
 from motor.motor_asyncio import AsyncIOMotorDatabase, AsyncIOMotorCollection
 from datetime import datetime
 import structlog
+import asyncio
 from bson import ObjectId
 
 from database.connection_manager import ConnectionManager
+from storage.local_semantic_storage import LocalSemanticStorage
+from storage.semantic_file_manager import SemanticFileManager
+from storage.config import get_config
 
 
 logger = structlog.get_logger(__name__)
@@ -20,6 +24,298 @@ class MetadataManager:
         self.connection_manager = connection_manager
         # 每个实例都有自己的元数据库，不再使用单一的_db
         self._instance_collections: Dict[str, Dict[str, AsyncIOMotorCollection]] = {}
+        self.metadata_cache: Dict[str, Dict] = {}
+        self.last_scan_time: Dict[str, datetime] = {}
+        self._lock = asyncio.Lock()
+        self._scan_stats = {
+            'total_scans': 0,
+            'incremental_scans': 0,
+            'full_scans': 0,
+            'cache_hits': 0,
+            'cache_misses': 0
+        }
+        self._collection_timestamps: Dict[str, Dict[str, datetime]] = {}  # instance -> {collection: last_modified}
+        
+        # 初始化本地存储组件
+        self.config = get_config()
+        self.local_storage = LocalSemanticStorage()
+        self.file_manager = SemanticFileManager()
+    
+    def _should_perform_full_scan(self, instance_name: str) -> bool:
+        """判断是否应该执行全量扫描"""
+        last_scan = self.last_scan_time.get(instance_name)
+        if not last_scan:
+            return True
+        
+        # 如果距离上次扫描超过24小时，执行全量扫描
+        time_diff = datetime.now() - last_scan
+        return time_diff.total_seconds() > 86400  # 24小时
+    
+    async def scan_all_metadata(self, force_full_scan: bool = False) -> bool:
+        """扫描所有实例的元数据"""
+        try:
+            scan_tasks = []
+            for instance_name in self.connection_manager.get_instance_names():
+                if force_full_scan or self._should_perform_full_scan(instance_name):
+                    scan_tasks.append(self.scan_instance_metadata(instance_name, full_scan=True))
+                else:
+                    scan_tasks.append(self.scan_instance_metadata_incremental(instance_name))
+            
+            # 并发执行扫描任务
+            results = await asyncio.gather(*scan_tasks, return_exceptions=True)
+            
+            # 检查结果
+            success_count = sum(1 for result in results if result is True)
+            total_count = len(results)
+            
+            self._scan_stats['total_scans'] += 1
+            if force_full_scan:
+                self._scan_stats['full_scans'] += 1
+            else:
+                self._scan_stats['incremental_scans'] += 1
+            
+            logger.info(f"元数据扫描完成: {success_count}/{total_count} 个实例成功")
+            return success_count == total_count
+            
+        except Exception as e:
+            logger.error(f"扫描所有元数据失败: {e}")
+            return False
+    
+    async def scan_instance_metadata(self, instance_name: str, full_scan: bool = False) -> bool:
+        """扫描指定实例的元数据"""
+        try:
+            # 确保实例元数据已初始化
+            if not await self.init_instance_metadata(instance_name):
+                logger.error(f"实例 {instance_name} 元数据初始化失败")
+                return False
+            
+            # 获取实例连接
+            instance_connection = self.connection_manager.get_instance_connection(instance_name)
+            if not instance_connection or not instance_connection.client:
+                logger.error(f"无法获取实例 {instance_name} 的连接")
+                return False
+            
+            # 获取实例信息
+            instance_doc = await self.get_instance_by_name(instance_name, instance_name)
+            if not instance_doc:
+                # 创建实例记录
+                instance_config = {
+                    "name": instance_name,
+                    "alias": instance_name,
+                    "connection_string": "auto_discovered",
+                    "description": "自动发现的实例",
+                    "environment": "unknown"
+                }
+                instance_id = await self.save_instance(instance_name, instance_config)
+            else:
+                instance_id = instance_doc["_id"]
+            
+            # 获取数据库列表
+            database_names = await instance_connection.client.list_database_names()
+            
+            scan_count = 0
+            for db_name in database_names:
+                # 跳过系统数据库
+                if db_name in ['admin', 'config', 'local']:
+                    continue
+                
+                try:
+                    # 扫描数据库
+                    if await self._scan_database_metadata(instance_name, instance_id, db_name, full_scan):
+                        scan_count += 1
+                except Exception as e:
+                    logger.warning(f"扫描数据库 {db_name} 失败", error=str(e))
+                    continue
+            
+            # 更新扫描时间
+            self.last_scan_time[instance_name] = datetime.now()
+            
+            logger.info(f"实例 {instance_name} 元数据扫描完成，处理了 {scan_count} 个数据库")
+            return True
+            
+        except Exception as e:
+            logger.error(f"扫描实例 {instance_name} 元数据失败", error=str(e))
+            return False
+    
+    async def scan_instance_metadata_incremental(self, instance_name: str) -> bool:
+        """增量扫描实例元数据"""
+        try:
+            # 检查缓存
+            cache_key = f"metadata_{instance_name}"
+            if cache_key in self.metadata_cache:
+                self._scan_stats['cache_hits'] += 1
+                logger.debug(f"使用缓存的元数据: {instance_name}")
+                return True
+            
+            self._scan_stats['cache_misses'] += 1
+            
+            # 执行增量扫描（只扫描变更的集合）
+            return await self.scan_instance_metadata(instance_name, full_scan=False)
+            
+        except Exception as e:
+            logger.error(f"增量扫描实例 {instance_name} 失败", error=str(e))
+            return False
+    
+    async def _scan_database_metadata(self, instance_name: str, instance_id: ObjectId, 
+                                    database_name: str, full_scan: bool = False) -> bool:
+        """扫描数据库元数据"""
+        try:
+            # 保存数据库信息
+            db_info = {
+                "name": database_name,
+                "description": f"自动发现的数据库: {database_name}"
+            }
+            await self.save_database(instance_name, instance_id, db_info)
+            
+            # 获取数据库连接
+            database = self.connection_manager.get_instance_database(instance_name, database_name)
+            if not database:
+                return False
+            
+            # 获取集合列表
+            collection_names = await database.list_collection_names()
+            
+            for collection_name in collection_names:
+                # 跳过系统集合
+                if collection_name.startswith('system.') or collection_name.startswith('_querynest'):
+                    continue
+                
+                try:
+                    await self._scan_collection_metadata(
+                        instance_name, instance_id, database_name, 
+                        collection_name, database, full_scan
+                    )
+                except Exception as e:
+                    logger.warning(f"扫描集合 {collection_name} 失败", error=str(e))
+                    continue
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"扫描数据库 {database_name} 失败", error=str(e))
+            return False
+    
+    async def _scan_collection_metadata(self, instance_name: str, instance_id: ObjectId,
+                                      database_name: str, collection_name: str,
+                                      database, full_scan: bool = False) -> bool:
+        """扫描集合元数据"""
+        try:
+            collection = database[collection_name]
+            
+            # 获取文档数量
+            doc_count = await collection.count_documents({})
+            
+            # 获取样本文档
+            sample_docs = []
+            if doc_count > 0:
+                cursor = collection.find().limit(3)
+                async for doc in cursor:
+                    # 转换ObjectId为字符串以便序列化
+                    sample_doc = self._serialize_document(doc)
+                    sample_docs.append(sample_doc)
+            
+            # 保存集合信息
+            collection_info = {
+                "database": database_name,
+                "name": collection_name,
+                "description": f"自动发现的集合: {collection_name}",
+                "document_count": doc_count,
+                "sample_documents": sample_docs
+            }
+            await self.save_collection(instance_name, instance_id, collection_info)
+            
+            # 分析字段结构
+            if full_scan or doc_count <= 1000:  # 小集合或全量扫描时分析字段
+                await self._analyze_collection_fields(
+                    instance_name, instance_id, database_name, 
+                    collection_name, collection
+                )
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"扫描集合 {collection_name} 失败", error=str(e))
+            return False
+    
+    async def _analyze_collection_fields(self, instance_name: str, instance_id: ObjectId,
+                                       database_name: str, collection_name: str, collection) -> bool:
+        """分析集合字段结构"""
+        try:
+            # 使用聚合管道分析字段
+            pipeline = [
+                {"$sample": {"size": 100}},  # 采样100个文档
+                {"$project": {"arrayofkeyvalue": {"$objectToArray": "$$ROOT"}}},
+                {"$unwind": "$arrayofkeyvalue"},
+                {"$group": {
+                    "_id": {
+                        "field": "$arrayofkeyvalue.k",
+                        "type": {"$type": "$arrayofkeyvalue.v"}
+                    },
+                    "count": {"$sum": 1},
+                    "examples": {"$addToSet": "$arrayofkeyvalue.v"}
+                }},
+                {"$sort": {"count": -1}}
+            ]
+            
+            field_stats = {}
+            async for result in collection.aggregate(pipeline):
+                field_name = result["_id"]["field"]
+                field_type = result["_id"]["type"]
+                count = result["count"]
+                examples = result["examples"][:5]  # 只保留前5个示例
+                
+                if field_name not in field_stats:
+                    field_stats[field_name] = {
+                        "types": {},
+                        "total_count": 0,
+                        "examples": []
+                    }
+                
+                field_stats[field_name]["types"][field_type] = count
+                field_stats[field_name]["total_count"] += count
+                field_stats[field_name]["examples"].extend(examples)
+            
+            # 保存字段信息
+            for field_name, stats in field_stats.items():
+                # 确定主要类型
+                main_type = max(stats["types"], key=stats["types"].get)
+                
+                field_info = {
+                    "database": database_name,
+                    "collection": collection_name,
+                    "path": field_name,
+                    "type": main_type,
+                    "examples": list(set(str(ex) for ex in stats["examples"][:5])),
+                    "is_indexed": False,  # 需要额外查询索引信息
+                    "is_required": stats["total_count"] > 0
+                }
+                
+                await self.save_field(instance_name, instance_id, field_info)
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"分析集合 {collection_name} 字段失败", error=str(e))
+            return False
+    
+    def _serialize_document(self, doc: Dict) -> Dict:
+        """序列化文档，处理特殊类型"""
+        if isinstance(doc, dict):
+            result = {}
+            for key, value in doc.items():
+                if isinstance(value, ObjectId):
+                    result[key] = str(value)
+                elif isinstance(value, datetime):
+                    result[key] = value.isoformat()
+                elif isinstance(value, (dict, list)):
+                    result[key] = self._serialize_document(value)
+                else:
+                    result[key] = value
+            return result
+        elif isinstance(doc, list):
+            return [self._serialize_document(item) for item in doc]
+        else:
+            return doc
     
     async def initialize(self) -> bool:
         """初始化元数据管理器（不预先初始化实例元数据）"""
@@ -345,36 +641,26 @@ class MetadataManager:
     async def update_field_semantics(self, target_instance_name: str, instance_id: ObjectId, database_name: str, 
                                    collection_name: str, field_path: str, 
                                    business_meaning: str, examples: List[str] = None) -> bool:
-        """更新字段业务语义，支持语义库和业务库双重存储策略"""
+        """更新字段业务语义，使用本地文件存储"""
         
-        # 尝试更新元数据库中的语义
-        metadata_success = await self._update_metadata_semantics(
-            target_instance_name, instance_id, database_name, collection_name, 
-            field_path, business_meaning, examples
-        )
-        
-        # 如果元数据库更新失败，尝试在业务库中存储语义
-        business_success = False
-        if not metadata_success:
-            business_success = await self._update_business_semantics(
+        try:
+            success = await self.local_storage.save_field_semantics(
                 target_instance_name, database_name, collection_name, 
-                field_path, business_meaning, examples
+                field_path, business_meaning, examples or []
             )
-        
-        result = metadata_success or business_success
-        
-        if result:
-            storage_type = "元数据库" if metadata_success else "业务库"
-            logger.info(
-                f"字段语义已更新至{storage_type}",
-                instance=target_instance_name,
-                database=database_name,
-                collection=collection_name,
-                field=field_path,
-                storage_type=storage_type
-            )
-        
-        return result
+            if success:
+                logger.info(
+                    "字段语义已保存到本地文件",
+                    instance=target_instance_name,
+                    database=database_name,
+                    collection=collection_name,
+                    field=field_path,
+                    meaning=business_meaning
+                )
+            return success
+        except Exception as e:
+            logger.error("本地文件语义保存失败", error=str(e))
+            return False
     
     async def _update_metadata_semantics(self, target_instance_name: str, instance_id: ObjectId, 
                                        database_name: str, collection_name: str, field_path: str, 
@@ -545,38 +831,19 @@ class MetadataManager:
         return results
     
     async def search_fields_by_meaning(self, target_instance_name: str, search_term: str) -> List[Dict[str, Any]]:
-        """根据业务含义搜索字段，同时搜索元数据库和业务库"""
-        results = []
-        
-        # 首先尝试从元数据库搜索
+        """根据业务含义搜索字段，使用本地文件存储"""
         try:
-            metadata_results = await self._search_metadata_semantics(target_instance_name, search_term)
-            results.extend(metadata_results)
-            logger.debug(f"元数据库搜索到 {len(metadata_results)} 条语义记录")
+            results = await self.local_storage.search_semantics(target_instance_name, search_term)
+            logger.info(
+                "本地文件语义搜索完成",
+                target_instance=target_instance_name,
+                search_term=search_term,
+                total_results=len(results)
+            )
+            return results
         except Exception as e:
-            logger.warning("元数据库语义搜索失败", error=str(e))
-        
-        # 然后搜索各个业务库中的语义信息
-        try:
-            business_results = await self._search_business_semantics(target_instance_name, search_term)
-            results.extend(business_results)
-            logger.debug(f"业务库搜索到 {len(business_results)} 条语义记录")
-        except Exception as e:
-            logger.warning("业务库语义搜索失败", error=str(e))
-        
-        # 去重并返回
-        unique_results = self._deduplicate_semantic_results(results)
-        
-        logger.info(
-            "综合语义字段搜索完成",
-            target_instance=target_instance_name,
-            search_term=search_term,
-            total_results=len(unique_results),
-            metadata_count=len(metadata_results) if 'metadata_results' in locals() else 0,
-            business_count=len(business_results) if 'business_results' in locals() else 0
-        )
-        
-        return unique_results
+            logger.error("本地文件语义搜索失败", error=str(e))
+            return []
     
     async def _search_metadata_semantics(self, target_instance_name: str, search_term: str) -> List[Dict[str, Any]]:
         """在元数据库中搜索语义信息"""
@@ -666,11 +933,19 @@ class MetadataManager:
         return results
     
     def _deduplicate_semantic_results(self, results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """去重语义搜索结果，优先保留元数据库的记录"""
+        """去重语义搜索结果，优先级：本地文件 > 元数据库 > 业务库"""
         seen = set()
         unique_results = []
         
-        # 先处理元数据库的结果
+        # 优先级1：本地文件的结果
+        for result in results:
+            if result.get("semantic_source") == "local_file":
+                key = (result.get("database_name", ""), result.get("collection_name", ""), result.get("field_path", ""))
+                if key not in seen:
+                    seen.add(key)
+                    unique_results.append(result)
+        
+        # 优先级2：元数据库的结果
         for result in results:
             if result.get("semantic_source") == "metadata_db":
                 key = (result.get("database_name", ""), result.get("collection_name", ""), result.get("field_path", ""))
@@ -678,7 +953,7 @@ class MetadataManager:
                     seen.add(key)
                     unique_results.append(result)
         
-        # 再处理业务库的结果，避免重复
+        # 优先级3：业务库的结果
         for result in results:
             if result.get("semantic_source") == "business_db":
                 key = (result.get("database_name", ""), result.get("collection_name", ""), result.get("field_path", ""))
@@ -714,5 +989,8 @@ class MetadataManager:
         
         # 查询历史统计
         stats["query_history_count"] = await collections['query_history'].count_documents({})
+        
+        # 扫描统计
+        stats["scan_stats"] = self._scan_stats.copy()
         
         return stats

@@ -1,0 +1,23 @@
+{
+  "storage": {
+    "base_path": "semantic_data",
+    "backup_enabled": true,
+    "backup_interval": 3600,
+    "max_backups": 10
+  },
+  "cache": {
+    "enabled": true,
+    "max_size": 1000,
+    "ttl": 300
+  },
+  "indexing": {
+    "auto_rebuild": true,
+    "rebuild_interval": 1800
+  },
+  "performance": {
+    "batch_size": 100,
+    "concurrent_operations": 10
+  },
+  "created_at": "2025-08-09T22:28:05.429843",
+  "version": "1.0.0"
+}

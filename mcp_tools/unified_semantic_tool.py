@@ -13,6 +13,10 @@ from datetime import datetime
 from database.connection_manager import ConnectionManager
 from database.metadata_manager import MetadataManager
 from scanner.semantic_analyzer import SemanticAnalyzer
+from storage.local_semantic_storage import LocalSemanticStorage
+from storage.semantic_file_manager import SemanticFileManager
+from storage.config import get_config
+from utils.error_handler import with_error_handling, with_retry, RetryConfig
 
 
 logger = structlog.get_logger(__name__)
@@ -27,6 +31,11 @@ class UnifiedSemanticTool:
         self.connection_manager = connection_manager
         self.metadata_manager = metadata_manager
         self.semantic_analyzer = semantic_analyzer
+        
+        # 初始化本地存储组件
+        self.config = get_config()
+        self.local_storage = LocalSemanticStorage(self.config)
+        self.file_manager = SemanticFileManager(self.config)
     
     def get_tool_definition(self) -> Tool:
         """获取工具定义"""
@@ -133,6 +142,7 @@ class UnifiedSemanticTool:
             }
         )
     
+    @with_error_handling("统一语义操作")
     async def execute(self, arguments: Dict[str, Any]) -> List[TextContent]:
         """执行统一语义操作"""
         action = arguments["action"]
@@ -140,44 +150,39 @@ class UnifiedSemanticTool:
         
         logger.info("执行统一语义操作", action=action, instance_id=instance_id)
         
-        try:
-            # 验证实例并初始化元数据
-            if not await self._validate_and_init_instance(instance_id):
-                return [TextContent(
-                    type="text",
-                    text=f"实例 '{instance_id}' 不存在或无法初始化元数据库。请使用 discover_instances 工具查看可用实例。"
-                )]
-            
-            # 根据操作类型执行相应功能
-            if action == "view_semantics":
-                return await self._handle_view_semantics(arguments)
-            elif action == "update_semantics":
-                return await self._handle_update_semantics(arguments)
-            elif action == "batch_analyze":
-                return await self._handle_batch_analyze(arguments)
-            elif action == "search_semantics":
-                return await self._handle_search_semantics(arguments)
-            elif action == "suggest_semantics":
-                return await self._handle_suggest_semantics(arguments)
-            elif action == "confirm_semantics":
-                return await self._handle_confirm_semantics(arguments)
-            elif action == "feedback_learning":
-                return await self._handle_feedback_learning(arguments)
-            elif action == "get_pending_confirmations":
-                return await self._handle_get_pending_confirmations(arguments)
-            elif action == "reject_suggestions":
-                return await self._handle_reject_suggestions(arguments)
-            else:
-                return [TextContent(
-                    type="text",
-                    text=f"不支持的操作类型: {action}"
-                )]
-                
-        except Exception as e:
-            error_msg = f"执行统一语义操作时发生错误: {str(e)}"
-            logger.error("统一语义操作失败", action=action, instance_id=instance_id, error=str(e))
-            return [TextContent(type="text", text=error_msg)]
+        # 验证实例并初始化元数据
+        if not await self._validate_and_init_instance(instance_id):
+            return [TextContent(
+                type="text",
+                text=f"实例 '{instance_id}' 不存在或无法初始化元数据库。请使用 discover_instances 工具查看可用实例。"
+            )]
+        
+        # 根据操作类型执行相应功能
+        if action == "view_semantics":
+            return await self._handle_view_semantics(arguments)
+        elif action == "update_semantics":
+            return await self._handle_update_semantics(arguments)
+        elif action == "batch_analyze":
+            return await self._handle_batch_analyze(arguments)
+        elif action == "search_semantics":
+            return await self._handle_search_semantics(arguments)
+        elif action == "suggest_semantics":
+            return await self._handle_suggest_semantics(arguments)
+        elif action == "confirm_semantics":
+            return await self._handle_confirm_semantics(arguments)
+        elif action == "feedback_learning":
+            return await self._handle_feedback_learning(arguments)
+        elif action == "get_pending_confirmations":
+            return await self._handle_get_pending_confirmations(arguments)
+        elif action == "reject_suggestions":
+            return await self._handle_reject_suggestions(arguments)
+        else:
+            return [TextContent(
+                type="text",
+                text=f"不支持的操作类型: {action}"
+            )]
     
+    @with_retry(RetryConfig(max_attempts=3, base_delay=1.0))
     async def _validate_and_init_instance(self, instance_id: str) -> bool:
         """验证实例并初始化元数据"""
         # 验证实例存在
@@ -187,6 +192,7 @@ class UnifiedSemanticTool:
         # 确保实例元数据已初始化
         return await self.metadata_manager.init_instance_metadata(instance_id)
     
+    @with_error_handling("查看语义操作")
     async def _handle_view_semantics(self, arguments: Dict[str, Any]) -> List[TextContent]:
         """处理查看语义操作"""
         instance_id = arguments["instance_id"]
@@ -207,6 +213,8 @@ class UnifiedSemanticTool:
             # 查看实例的语义覆盖情况
             return await self._view_instance_semantics(instance_id)
     
+    @with_error_handling("更新语义操作")
+    @with_retry(RetryConfig(max_attempts=2, base_delay=1.0))
     async def _handle_update_semantics(self, arguments: Dict[str, Any]) -> List[TextContent]:
         """处理更新语义操作"""
         instance_id = arguments["instance_id"]
@@ -221,49 +229,46 @@ class UnifiedSemanticTool:
                 text="更新语义操作需要提供 database_name, collection_name, field_path 和 business_meaning 参数。"
             )]
         
-        try:
-            # 获取实例信息
-            instance_info = await self.metadata_manager.get_instance_by_name(instance_id, instance_id)
-            if not instance_info:
-                return [TextContent(
-                    type="text",
-                    text=f"实例 '{instance_id}' 不存在"
-                )]
+        # 获取实例信息
+        instance_info = await self.metadata_manager.get_instance_by_name(instance_id, instance_id)
+        if not instance_info:
+            return [TextContent(
+                type="text",
+                text=f"实例 '{instance_id}' 不存在"
+            )]
+        
+        instance_obj_id = instance_info["_id"]
+        
+        # 使用统一的语义更新方法（自动选择语义库或业务库）
+        success = await self.metadata_manager.update_field_semantics(
+            instance_id, instance_obj_id, database_name, collection_name, 
+            field_path, business_meaning
+        )
+        
+        if success:
+            result_text = f"✅ 成功更新字段语义\n\n"
+            result_text += f"- **实例**: {instance_id}\n"
+            result_text += f"- **数据库**: {database_name}\n"
+            result_text += f"- **集合**: {collection_name}\n"
+            result_text += f"- **字段**: {field_path}\n"
+            result_text += f"- **业务含义**: {business_meaning}\n\n"
+            result_text += f"💡 系统已自动选择最佳存储位置（语义库或业务库）进行更新。"
             
-            instance_obj_id = instance_info["_id"]
-            
-            # 使用统一的语义更新方法（自动选择语义库或业务库）
-            success = await self.metadata_manager.update_field_semantics(
-                instance_id, instance_obj_id, database_name, collection_name, 
-                field_path, business_meaning
+            logger.info(
+                "字段语义更新成功",
+                instance_id=instance_id,
+                database=database_name,
+                collection=collection_name,
+                field_path=field_path
             )
-            
-            if success:
-                result_text = f"✅ 成功更新字段语义\n\n"
-                result_text += f"- **实例**: {instance_id}\n"
-                result_text += f"- **数据库**: {database_name}\n"
-                result_text += f"- **集合**: {collection_name}\n"
-                result_text += f"- **字段**: {field_path}\n"
-                result_text += f"- **业务含义**: {business_meaning}\n\n"
-                result_text += f"💡 系统已自动选择最佳存储位置（语义库或业务库）进行更新。"
-                
-                logger.info(
-                    "字段语义更新成功",
-                    instance_id=instance_id,
-                    database=database_name,
-                    collection=collection_name,
-                    field_path=field_path
-                )
-            else:
-                result_text = f"❌ 更新字段语义失败\n\n"
-                result_text += f"请检查字段路径是否正确，或字段是否存在于集合中。"
-            
-            return [TextContent(type="text", text=result_text)]
-            
-        except Exception as e:
-            logger.error("更新字段语义失败", error=str(e))
-            return [TextContent(type="text", text=f"更新字段语义时发生错误: {str(e)}")]
+        else:
+            result_text = f"❌ 更新字段语义失败\n\n"
+            result_text += f"请检查字段路径是否正确，或字段是否存在于集合中。"
+        
+        return [TextContent(type="text", text=result_text)]
     
+    @with_error_handling("批量分析操作")
+    @with_retry(RetryConfig(max_attempts=2, base_delay=2.0))
     async def _handle_batch_analyze(self, arguments: Dict[str, Any]) -> List[TextContent]:
         """处理批量分析操作"""
         instance_id = arguments["instance_id"]
@@ -276,44 +281,40 @@ class UnifiedSemanticTool:
                 text="批量分析操作需要提供 database_name 和 collection_name 参数。"
             )]
         
-        try:
-            # 执行批量语义分析
-            analysis_result = await self.semantic_analyzer.batch_analyze_collection(
-                instance_id, database_name, collection_name
-            )
+        # 执行批量语义分析
+        analysis_result = await self.semantic_analyzer.batch_analyze_collection(
+            instance_id, database_name, collection_name
+        )
+        
+        result_text = f"## 批量语义分析结果\n\n"
+        result_text += f"- **实例**: {instance_id}\n"
+        result_text += f"- **数据库**: {database_name}\n"
+        result_text += f"- **集合**: {collection_name}\n\n"
+        
+        if analysis_result.get("success"):
+            analyzed_fields = analysis_result.get("analyzed_fields", [])
+            result_text += f"### 分析统计\n\n"
+            result_text += f"- **分析字段数**: {len(analyzed_fields)}\n"
+            result_text += f"- **成功识别语义**: {len([f for f in analyzed_fields if f.get('suggested_meaning')])}\n\n"
             
-            result_text = f"## 批量语义分析结果\n\n"
-            result_text += f"- **实例**: {instance_id}\n"
-            result_text += f"- **数据库**: {database_name}\n"
-            result_text += f"- **集合**: {collection_name}\n\n"
+            if analyzed_fields:
+                result_text += f"### 字段语义分析结果\n\n"
+                for field in analyzed_fields[:10]:  # 显示前10个字段
+                    field_path = field.get('field_path', '')
+                    suggested_meaning = field.get('suggested_meaning', '未识别')
+                    confidence = field.get('confidence', 0.0)
+                    
+                    result_text += f"**{field_path}**\n"
+                    result_text += f"- 建议语义: {suggested_meaning}\n"
+                    result_text += f"- 置信度: {confidence:.2f}\n\n"
             
-            if analysis_result.get("success"):
-                analyzed_fields = analysis_result.get("analyzed_fields", [])
-                result_text += f"### 分析统计\n\n"
-                result_text += f"- **分析字段数**: {len(analyzed_fields)}\n"
-                result_text += f"- **成功识别语义**: {len([f for f in analyzed_fields if f.get('suggested_meaning')])}\n\n"
-                
-                if analyzed_fields:
-                    result_text += f"### 字段语义分析结果\n\n"
-                    for field in analyzed_fields[:10]:  # 显示前10个字段
-                        field_path = field.get('field_path', '')
-                        suggested_meaning = field.get('suggested_meaning', '未识别')
-                        confidence = field.get('confidence', 0.0)
-                        
-                        result_text += f"**{field_path}**\n"
-                        result_text += f"- 建议语义: {suggested_meaning}\n"
-                        result_text += f"- 置信度: {confidence:.2f}\n\n"
-                
-                result_text += f"💡 语义信息已自动存储到最佳位置（语义库或业务库）。"
-            else:
-                result_text += f"❌ 批量分析失败: {analysis_result.get('error', '未知错误')}"
-            
-            return [TextContent(type="text", text=result_text)]
-            
-        except Exception as e:
-            logger.error("批量语义分析失败", error=str(e))
-            return [TextContent(type="text", text=f"批量语义分析时发生错误: {str(e)}")]
+            result_text += f"💡 语义信息已自动存储到最佳位置（语义库或业务库）。"
+        else:
+            result_text += f"❌ 批量分析失败: {analysis_result.get('error', '未知错误')}"
+        
+        return [TextContent(type="text", text=result_text)]
     
+    @with_error_handling("搜索语义操作")
     async def _handle_search_semantics(self, arguments: Dict[str, Any]) -> List[TextContent]:
         """处理搜索语义操作"""
         instance_id = arguments["instance_id"]
@@ -325,48 +326,43 @@ class UnifiedSemanticTool:
                 text="搜索语义操作需要提供 search_term 参数。"
             )]
         
-        try:
-            # 使用统一的语义搜索方法（同时搜索语义库和业务库）
-            search_results = await self.metadata_manager.search_fields_by_meaning(
-                instance_id, search_term
-            )
+        # 使用统一的语义搜索方法（同时搜索语义库和业务库）
+        search_results = await self.metadata_manager.search_fields_by_meaning(
+            instance_id, search_term
+        )
+        
+        result_text = f"## 语义搜索结果\n\n"
+        result_text += f"- **实例**: {instance_id}\n"
+        result_text += f"- **搜索关键词**: {search_term}\n"
+        result_text += f"- **找到结果**: {len(search_results)} 条\n\n"
+        
+        if search_results:
+            # 按数据库分组显示结果
+            grouped_results = {}
+            for result in search_results:
+                db_name = result.get('database_name', '未知')
+                if db_name not in grouped_results:
+                    grouped_results[db_name] = []
+                grouped_results[db_name].append(result)
             
-            result_text = f"## 语义搜索结果\n\n"
-            result_text += f"- **实例**: {instance_id}\n"
-            result_text += f"- **搜索关键词**: {search_term}\n"
-            result_text += f"- **找到结果**: {len(search_results)} 条\n\n"
-            
-            if search_results:
-                # 按数据库分组显示结果
-                grouped_results = {}
-                for result in search_results:
-                    db_name = result.get('database_name', '未知')
-                    if db_name not in grouped_results:
-                        grouped_results[db_name] = []
-                    grouped_results[db_name].append(result)
+            for db_name, db_results in grouped_results.items():
+                result_text += f"### 📂 数据库: {db_name}\n\n"
                 
-                for db_name, db_results in grouped_results.items():
-                    result_text += f"### 📂 数据库: {db_name}\n\n"
+                for result in db_results[:5]:  # 每个数据库显示前5个结果
+                    collection_name = result.get('collection_name', '未知')
+                    field_path = result.get('field_path', '未知')
+                    business_meaning = result.get('business_meaning', '未定义')
+                    semantic_source = result.get('semantic_source', '未知')
                     
-                    for result in db_results[:5]:  # 每个数据库显示前5个结果
-                        collection_name = result.get('collection_name', '未知')
-                        field_path = result.get('field_path', '未知')
-                        business_meaning = result.get('business_meaning', '未定义')
-                        semantic_source = result.get('semantic_source', '未知')
-                        
-                        result_text += f"**{collection_name}.{field_path}**\n"
-                        result_text += f"- 语义: {business_meaning}\n"
-                        result_text += f"- 来源: {semantic_source}\n\n"
-                
-                result_text += f"💡 搜索结果来自语义库和业务库的综合查询。"
-            else:
-                result_text += f"未找到包含关键词 '{search_term}' 的语义信息。"
+                    result_text += f"**{collection_name}.{field_path}**\n"
+                    result_text += f"- 语义: {business_meaning}\n"
+                    result_text += f"- 来源: {semantic_source}\n\n"
             
-            return [TextContent(type="text", text=result_text)]
-            
-        except Exception as e:
-            logger.error("搜索语义失败", error=str(e))
-            return [TextContent(type="text", text=f"搜索语义时发生错误: {str(e)}")]
+            result_text += f"💡 搜索结果来自语义库和业务库的综合查询。"
+        else:
+            result_text += f"未找到包含关键词 '{search_term}' 的语义信息。"
+        
+        return [TextContent(type="text", text=result_text)]
     
     async def _handle_suggest_semantics(self, arguments: Dict[str, Any]) -> List[TextContent]:
         """处理语义建议操作"""
@@ -651,53 +647,50 @@ class UnifiedSemanticTool:
             return [TextContent(type="text", text=f"拒绝建议时发生错误: {str(e)}")]
     
     # 辅助方法
+    @with_error_handling("查看字段语义")
     async def _view_field_semantics(self, instance_id: str, database_name: str, 
                                   collection_name: str, field_path: str) -> List[TextContent]:
         """查看特定字段的语义信息"""
-        try:
-            # 使用统一的搜索方法（同时搜索语义库和业务库）
-            search_results = await self.metadata_manager.search_fields_by_meaning(
-                instance_id, field_path
-            )
+        # 使用统一的搜索方法（同时搜索语义库和业务库）
+        search_results = await self.metadata_manager.search_fields_by_meaning(
+            instance_id, field_path
+        )
+        
+        # 筛选出指定字段的结果
+        field_results = [
+            result for result in search_results
+            if (result.get('database_name') == database_name and 
+                result.get('collection_name') == collection_name and 
+                result.get('field_path') == field_path)
+        ]
+        
+        result_text = f"## 字段语义信息\n\n"
+        result_text += f"- **实例**: {instance_id}\n"
+        result_text += f"- **数据库**: {database_name}\n"
+        result_text += f"- **集合**: {collection_name}\n"
+        result_text += f"- **字段**: {field_path}\n\n"
+        
+        if field_results:
+            field_info = field_results[0]
+            business_meaning = field_info.get('business_meaning', '未定义')
+            field_type = field_info.get('field_type', '未知')
+            semantic_source = field_info.get('semantic_source', '未知')
+            examples = field_info.get('examples', [])
             
-            # 筛选出指定字段的结果
-            field_results = [
-                result for result in search_results
-                if (result.get('database_name') == database_name and 
-                    result.get('collection_name') == collection_name and 
-                    result.get('field_path') == field_path)
-            ]
+            result_text += f"### 语义详情\n\n"
+            result_text += f"- **字段类型**: {field_type}\n"
+            result_text += f"- **业务含义**: {business_meaning}\n"
+            result_text += f"- **存储位置**: {semantic_source}\n"
             
-            result_text = f"## 字段语义信息\n\n"
-            result_text += f"- **实例**: {instance_id}\n"
-            result_text += f"- **数据库**: {database_name}\n"
-            result_text += f"- **集合**: {collection_name}\n"
-            result_text += f"- **字段**: {field_path}\n\n"
-            
-            if field_results:
-                field_info = field_results[0]
-                business_meaning = field_info.get('business_meaning', '未定义')
-                field_type = field_info.get('field_type', '未知')
-                semantic_source = field_info.get('semantic_source', '未知')
-                examples = field_info.get('examples', [])
-                
-                result_text += f"### 语义详情\n\n"
-                result_text += f"- **字段类型**: {field_type}\n"
-                result_text += f"- **业务含义**: {business_meaning}\n"
-                result_text += f"- **存储位置**: {semantic_source}\n"
-                
-                if examples:
-                    examples_str = ', '.join(str(ex) for ex in examples[:5])
-                    result_text += f"- **示例值**: {examples_str}\n"
-            else:
-                result_text += f"该字段暂无语义信息。\n"
-            
-            return [TextContent(type="text", text=result_text)]
-            
-        except Exception as e:
-            logger.error("查看字段语义失败", error=str(e))
-            return [TextContent(type="text", text=f"查看字段语义时发生错误: {str(e)}")]
+            if examples:
+                examples_str = ', '.join(str(ex) for ex in examples[:5])
+                result_text += f"- **示例值**: {examples_str}\n"
+        else:
+            result_text += f"该字段暂无语义信息。\n"
+        
+        return [TextContent(type="text", text=result_text)]
     
+    @with_error_handling("查看集合语义")
     async def _view_collection_semantics(self, instance_id: str, database_name: str, collection_name: str) -> List[TextContent]:
         """查看集合的所有字段语义"""
         try:
@@ -753,6 +746,7 @@ class UnifiedSemanticTool:
             logger.error("查看集合语义失败", error=str(e))
             return [TextContent(type="text", text=f"查看集合语义时发生错误: {str(e)}")]
     
+    @with_error_handling("查看数据库语义")
     async def _view_database_semantics(self, instance_id: str, database_name: str) -> List[TextContent]:
         """查看数据库的语义覆盖情况"""
         try:
@@ -811,6 +805,7 @@ class UnifiedSemanticTool:
             logger.error("查看数据库语义失败", error=str(e))
             return [TextContent(type="text", text=f"查看数据库语义时发生错误: {str(e)}")]
     
+    @with_error_handling("查看实例语义")
     async def _view_instance_semantics(self, instance_id: str) -> List[TextContent]:
         """查看实例的语义覆盖情况"""
         try:

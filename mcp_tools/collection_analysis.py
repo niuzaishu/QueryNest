@@ -8,6 +8,7 @@ from mcp.types import Tool, TextContent
 from database.connection_manager import ConnectionManager
 from database.metadata_manager import MetadataManager
 from scanner.semantic_analyzer import SemanticAnalyzer
+from utils.error_handler import with_error_handling, with_retry, RetryConfig
 
 
 logger = structlog.get_logger(__name__)
@@ -68,6 +69,7 @@ class CollectionAnalysisTool:
             }
         )
     
+    @with_error_handling("集合分析失败")
     async def execute(self, arguments: Dict[str, Any]) -> List[TextContent]:
         """执行集合分析"""
         instance_id = arguments["instance_id"]
@@ -85,23 +87,22 @@ class CollectionAnalysisTool:
             collection=collection_name
         )
         
-        try:
-            # 验证实例和连接
-            if not self.connection_manager.has_instance(instance_id):
-                return [TextContent(
-                    type="text",
-                    text=f"实例 '{instance_id}' 不存在。请使用 discover_instances 工具查看可用实例。"
-                )]
-            
-            # 检查实例健康状态
-            health_status = await self.connection_manager.check_instance_health(instance_id)
-            if not health_status["healthy"]:
-                return [TextContent(
-                    type="text",
-                    text=f"实例 '{instance_id}' 不健康: {health_status.get('error', 'Unknown error')}"
-                )]
-            
-            # 验证集合是否存在
+        # 验证实例和连接
+        if not self.connection_manager.has_instance(instance_id):
+            return [TextContent(
+                type="text",
+                text=f"实例 '{instance_id}' 不存在。请使用 discover_instances 工具查看可用实例。"
+            )]
+        
+        # 检查实例健康状态
+        health_status = await self.connection_manager.check_instance_health(instance_id)
+        if not health_status["healthy"]:
+            return [TextContent(
+                type="text",
+                text=f"实例 '{instance_id}' 不健康: {health_status.get('error', 'Unknown error')}"
+            )]
+        
+        # 验证集合是否存在
             collection_exists = await self._check_collection_exists(instance_id, database_name, collection_name)
             if not collection_exists:
                 return [TextContent(
@@ -163,57 +164,41 @@ class CollectionAnalysisTool:
             )
             
             return [TextContent(type="text", text=result_text)]
-            
-        except Exception as e:
-            error_msg = f"分析集合时发生错误: {str(e)}"
-            logger.error(
-                "集合分析失败",
-                instance_id=instance_id,
-                database=database_name,
-                collection=collection_name,
-                error=str(e)
-            )
-            return [TextContent(type="text", text=error_msg)]
     
+    @with_retry(RetryConfig(max_attempts=3, base_delay=1.0))
+    @with_error_handling("检查集合存在性失败")
     async def _check_collection_exists(self, instance_id: str, database_name: str, collection_name: str) -> bool:
         """检查集合是否存在"""
-        try:
-            connection = self.connection_manager.get_instance_connection(instance_id)
-            if connection is None:
-                return False
-            
-            db = connection.get_database(database_name)
-            collection_names = await db.list_collection_names()
-            return collection_name in collection_names
-            
-        except Exception as e:
-            logger.error("检查集合存在性失败", error=str(e))
+        connection = self.connection_manager.get_instance_connection(instance_id)
+        if connection is None:
             return False
+        
+        db = connection.get_database(database_name)
+        collection_names = await db.list_collection_names()
+        return collection_name in collection_names
     
+    @with_error_handling("检查集合元数据失败")
     async def _has_collection_metadata(self, instance_id: str, database_name: str, collection_name: str) -> bool:
         """检查是否已有集合元数据"""
-        try:
-            # 获取实例的ObjectId
-            from bson import ObjectId
-            if isinstance(instance_id, str):
-                # 如果是字符串，需要先获取实例信息来得到ObjectId
-                instance_info = await self.metadata_manager.get_instance_by_name(instance_id, instance_id)
-                if not instance_info:
-                    return False
-                instance_obj_id = instance_info["_id"]
-            else:
-                instance_obj_id = instance_id
-            
-            collections = await self.metadata_manager.get_collections_by_database(
-                instance_id, instance_obj_id, database_name
-            )
-            # 检查是否存在指定的集合
-            for collection in collections:
-                if collection.get("collection_name") == collection_name:
-                    return True
-            return False
-        except Exception:
-            return False
+        # 获取实例的ObjectId
+        from bson import ObjectId
+        if isinstance(instance_id, str):
+            # 如果是字符串，需要先获取实例信息来得到ObjectId
+            instance_info = await self.metadata_manager.get_instance_by_name(instance_id, instance_id)
+            if not instance_info:
+                return False
+            instance_obj_id = instance_info["_id"]
+        else:
+            instance_obj_id = instance_id
+        
+        collections = await self.metadata_manager.get_collections_by_database(
+            instance_id, instance_obj_id, database_name
+        )
+        # 检查是否存在指定的集合
+        for collection in collections:
+            if collection.get("collection_name") == collection_name:
+                return True
+        return False
     
     async def _scan_collection(self, instance_id: str, database_name: str, collection_name: str) -> Dict[str, Any]:
         """扫描集合结构"""
@@ -346,69 +331,56 @@ class CollectionAnalysisTool:
         
         return result_text
     
+    @with_retry(RetryConfig(max_attempts=2, base_delay=0.5))
+    @with_error_handling("获取索引信息失败")
     async def _get_collection_indexes(self, instance_id: str, database_name: str, collection_name: str) -> List[Dict[str, Any]]:
         """获取集合索引信息"""
-        try:
-            connection = self.connection_manager.get_instance_connection(instance_id)
-            if connection is None:
-                return []
-            
-            db = connection.get_database(database_name)
-            collection = db[collection_name]
-            
-            indexes = []
-            async for index in collection.list_indexes():
-                indexes.append(index)
-            
-            return indexes
-            
-        except Exception as e:
-            logger.warning(
-                "获取索引信息失败",
-                instance_id=instance_id,
-                database=database_name,
-                collection=collection_name,
-                error=str(e)
-            )
+        connection = self.connection_manager.get_instance_connection(instance_id)
+        if connection is None:
             return []
+        
+        db = connection.get_database(database_name)
+        collection = db[collection_name]
+        
+        indexes = []
+        async for index in collection.list_indexes():
+            indexes.append(index)
+        
+        return indexes
     
+    @with_error_handling("生成语义总结失败")
     async def _get_semantic_summary(self, instance_id: str, database_name: str, 
                                   collection_name: str, fields: List[Dict[str, Any]]) -> str:
         """获取语义分析总结"""
-        try:
-            # 统计语义信息
-            total_fields = len(fields)
-            fields_with_meaning = sum(1 for field in fields if field.get("business_meaning"))
-            
-            if total_fields == 0:
-                return ""
-            
-            semantic_coverage = fields_with_meaning / total_fields
-            
-            summary = "### 语义分析总结\n\n"
-            summary += f"- **字段总数**: {total_fields}\n"
-            summary += f"- **已定义语义**: {fields_with_meaning} ({semantic_coverage:.1%})\n"
-            
-            if semantic_coverage < 0.5:
-                summary += "- **建议**: 语义覆盖率较低，建议使用 `manage_semantics` 工具完善字段含义\n"
-            elif semantic_coverage < 0.8:
-                summary += "- **建议**: 语义覆盖率中等，可以进一步完善剩余字段的含义\n"
-            else:
-                summary += "- **状态**: ✅ 语义覆盖率良好\n"
-            
-            # 推荐业务领域
-            business_domains = await self.semantic_analyzer.suggest_business_domain(
-                database_name, [{"collection_name": collection_name}]
-            )
-            if business_domains:
-                summary += f"- **推荐业务领域**: {', '.join(business_domains)}\n"
-            
-            summary += "\n"
-            return summary
-            
-        except Exception as e:
-            logger.warning("生成语义总结失败", error=str(e))
+        # 统计语义信息
+        total_fields = len(fields)
+        fields_with_meaning = sum(1 for field in fields if field.get("business_meaning"))
+        
+        if total_fields == 0:
             return ""
+        
+        semantic_coverage = fields_with_meaning / total_fields
+        
+        summary = "### 语义分析总结\n\n"
+        summary += f"- **字段总数**: {total_fields}\n"
+        summary += f"- **已定义语义**: {fields_with_meaning} ({semantic_coverage:.1%})\n"
+        
+        if semantic_coverage < 0.5:
+            summary += "- **建议**: 语义覆盖率较低，建议使用 `manage_semantics` 工具完善字段含义\n"
+        elif semantic_coverage < 0.8:
+            summary += "- **建议**: 语义覆盖率中等，可以进一步完善剩余字段的含义\n"
+        else:
+            summary += "- **状态**: ✅ 语义覆盖率良好\n"
+        
+        # 推荐业务领域
+        business_domains = await self.semantic_analyzer.suggest_business_domain(
+            database_name, [{"collection_name": collection_name}]
+        )
+        if business_domains:
+            summary += f"- **推荐业务领域**: {', '.join(business_domains)}\n"
+        
+        summary += "\n"
+        return summary
     
     def _format_size(self, size_bytes: int) -> str:
         """格式化字节大小"""
@@ -425,30 +397,20 @@ class CollectionAnalysisTool:
         
         return f"{size:.1f} {units[unit_index]}"
     
+    @with_error_handling("获取字段建议失败")
     async def get_field_suggestions(self, instance_id: str, database_name: str, 
                                   collection_name: str, query_description: str) -> List[Dict[str, Any]]:
         """根据查询描述获取字段建议"""
-        try:
-            fields = await self.metadata_manager.get_fields_by_collection(
-                instance_id, instance_id, database_name, collection_name
-            )
-            
-            if not fields:
-                return []
-            
-            # 使用语义分析器获取建议
-            suggestions = self.semantic_analyzer.get_semantic_suggestions_for_query(
-                query_description, fields
-            )
-            
-            return suggestions
-            
-        except Exception as e:
-            logger.error(
-                "获取字段建议失败",
-                instance_id=instance_id,
-                database=database_name,
-                collection=collection_name,
-                error=str(e)
-            )
+        fields = await self.metadata_manager.get_fields_by_collection(
+            instance_id, instance_id, database_name, collection_name
+        )
+        
+        if not fields:
             return []
+        
+        # 使用语义分析器获取建议
+        suggestions = self.semantic_analyzer.get_semantic_suggestions_for_query(
+            query_description, fields
+        )
+        
+        return suggestions

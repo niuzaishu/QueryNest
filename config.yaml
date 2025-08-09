@@ -54,18 +54,7 @@ security:
       - "delete"
       - "drop"
       - "create"
-    # 禁止的聚合阶段
-    forbidden_aggregation_stages:
-      - "$out"
-      - "$merge"
-      - "$function"
-      - "$accumulator"
-      - "$where"
-    # 禁止的查询操作符
-    forbidden_query_operators:
-      - "$where"
-      - "$function"
-      - "$accumulator"
+  
   
   # 查询限制
   limits:
@@ -73,10 +62,7 @@ security:
     max_documents: 1000
     # 查询超时时间（秒）
     query_timeout: 30
-    # 最大聚合管道阶段数
-    max_pipeline_stages: 20
-    # 最大查询复杂度评分
-    max_query_complexity: 100
+
   
   # 数据脱敏配置
   data_masking:
@@ -92,16 +78,7 @@ security:
       - "email"
       - "id_card"
       - "credit_card"
-    # 脱敏策略
-    masking_strategies:
-      email: "partial"  # 部分遮蔽
-      phone: "partial"
-      password: "full"  # 完全遮蔽
-      secret: "full"
-      token: "full"
-      key: "full"
-      id_card: "partial"
-      credit_card: "partial"
+
 
 # MCP服务配置
 mcp:
@@ -111,50 +88,7 @@ mcp:
     version: "1.0.0"
     description: "MongoDB多实例查询服务"
   
-  # 工具配置
-  tools:
-    # 实例发现工具
-    instance_discovery:
-      enabled: true
-      include_health_check: true
-      include_statistics: true
-    
-    # 数据库发现工具
-    database_discovery:
-      enabled: true
-      exclude_system_databases: true
-      include_collection_list: true
-      include_statistics: true
-    
-    # 集合分析工具
-    collection_analysis:
-      enabled: true
-      default_sample_size: 100
-      max_sample_size: 1000
-      include_semantics: true
-      include_examples: true
-      include_indexes: true
-    
-    # 语义管理工具
-    semantic_management:
-      enabled: true
-      auto_analyze_threshold: 0.8
-      batch_analyze_limit: 50
-    
-    # 查询生成工具
-    query_generation:
-      enabled: true
-      default_limit: 100
-      max_limit: 1000
-      include_explanation: true
-      save_query_history: true
-    
-    # 查询确认工具
-    query_confirmation:
-      enabled: true
-      default_format_output: true
-      include_metadata: true
-      include_performance_suggestions: true
+
 
 # 日志配置
 logging:
@@ -164,10 +98,6 @@ logging:
   format: "json"  # json 或 text
   # 日志输出
   output:
-    # 控制台输出
-    console:
-      enabled: true
-      level: "INFO"
     # 文件输出
     file:
       enabled: false
@@ -175,18 +105,6 @@ logging:
       level: "DEBUG"
       max_size: "100MB"
       backup_count: 5
-  # 结构化日志字段
-  structured_fields:
-    - "timestamp"
-    - "level"
-    - "logger"
-    - "message"
-    - "instance_id"
-    - "database"
-    - "collection"
-    - "query_type"
-    - "execution_time"
-    - "error"
 
 # 性能配置
 performance:
@@ -198,73 +116,3 @@ performance:
     max_retries: 3
     # 重试间隔（秒）
     retry_interval: 5
-  
-  # 缓存配置
-  cache:
-    # 是否启用缓存
-    enabled: false
-    # 缓存类型：memory 或 redis
-    type: "memory"
-    # Redis配置（当type为redis时）
-    redis:
-      host: "localhost"
-      port: 6379
-      db: 0
-      # password: "redis_password"
-    # 缓存TTL（秒）
-    ttl:
-      instance_list: 300
-      database_list: 600
-      collection_metadata: 1800
-      query_results: 60
-  
-  # 扫描配置
-  scanning:
-    # 自动扫描间隔（小时）
-    auto_scan_interval: 24
-    # 增量扫描阈值
-    incremental_scan_threshold: 0.1
-    # 并发扫描数
-    concurrent_scans: 3
-
-# 监控配置
-monitoring:
-  # 指标收集
-  metrics:
-    enabled: false
-    # 指标输出格式：prometheus 或 json
-    format: "prometheus"
-    # 指标端口
-    port: 9090
-    # 收集间隔（秒）
-    collection_interval: 60
-  
-  # 健康检查
-  health_check:
-    # 健康检查端点
-    endpoint: "/health"
-    # 健康检查端口
-    port: 8080
-    # 检查项目
-    checks:
-      - "database_connections"
-      - "metadata_database"
-      - "query_engine"
-
-# 开发配置
-development:
-  # 调试模式
-  debug: false
-  # 详细日志
-  verbose_logging: false
-  # 性能分析
-  profiling:
-    enabled: false
-    output_dir: "profiles"
-  # 测试数据
-  test_data:
-    enabled: false
-    sample_collections:
-      - "users"
-      - "orders"
-      - "products"

@@ -12,6 +12,7 @@ from utils.parameter_validator import (
     is_boolean
 )
 from utils.tool_context import get_context_manager, ToolExecutionContext
+from utils.error_handler import with_error_handling, with_retry, RetryConfig
 
 
 logger = structlog.get_logger(__name__)
@@ -69,6 +70,8 @@ class InstanceDiscoveryTool:
         
         return validator
 
+    @with_error_handling({"component": "instance_discovery", "operation": "execute"})
+    @with_retry(RetryConfig(max_attempts=2, base_delay=1.0))
     async def execute(self, arguments: Dict[str, Any]) -> List[TextContent]:
         """执行实例发现"""
         # 参数验证
@@ -150,6 +153,7 @@ class InstanceDiscoveryTool:
             logger.error("实例发现失败", error=str(e))
             return [TextContent(type="text", text=error_msg)]
     
+    @with_error_handling({"component": "instance_discovery", "operation": "get_instance_stats"})
     async def _get_instance_stats(self, instance_id: str) -> Optional[Dict[str, Any]]:
         """获取实例统计信息"""
         try:
@@ -199,6 +203,7 @@ class InstanceDiscoveryTool:
         except Exception:
             return False
     
+    @with_error_handling({"component": "instance_discovery", "operation": "get_instance_info"})
     async def get_instance_info(self, instance_id: str) -> Optional[Dict[str, Any]]:
         """获取实例详细信息"""
         try:

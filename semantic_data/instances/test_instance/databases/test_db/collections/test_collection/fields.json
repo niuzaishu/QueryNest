@@ -1,0 +1,20 @@
+{
+  "collection_name": "test_collection",
+  "last_updated": "2025-08-09T22:28:05.451331",
+  "fields": {
+    "user.name": {
+      "business_meaning": "用户姓名",
+      "confidence": [
+        "张三",
+        "李四",
+        "王五"
+      ],
+      "data_type": "unknown",
+      "examples": [],
+      "analysis_result": {},
+      "created_at": "2025-08-09T22:28:05.451331",
+      "updated_at": "2025-08-09T22:28:05.451331",
+      "source": "manual"
+    }
+  }
+}

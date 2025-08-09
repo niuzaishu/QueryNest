@@ -382,6 +382,101 @@ class WorkflowManager:
             ), current_stage_info
         
         return True, "工具调用符合流程要求", self.get_current_stage_info(session_id)
+    
+    def _get_stage_for_tool(self, tool_name: str) -> str:
+        """根据工具名称获取对应的工作流阶段"""
+        stage_mapping = {
+            'instance_discovery': 'discovery',
+            'database_discovery': 'discovery', 
+            'collection_analysis': 'analysis',
+            'query_generation': 'generation',
+            'unified_semantic': 'semantic_analysis',
+            'workflow_status': 'management',
+            'reset_workflow': 'management'
+        }
+        return stage_mapping.get(tool_name, 'execution')
+    
+    def get_flexible_stage_mapping(self, tool_name: str, context: Dict[str, Any] = None) -> str:
+        """灵活的阶段映射，支持上下文相关的阶段判断"""
+        # 基础映射
+        base_stage = self._get_stage_for_tool(tool_name)
+        
+        # 根据上下文调整阶段
+        if context:
+            # 如果是语义分析工具，根据操作类型细分阶段
+            if tool_name == 'unified_semantic':
+                operation = context.get('operation', '')
+                if operation in ['view', 'search']:
+                    return 'semantic_view'
+                elif operation in ['update', 'batch_analyze']:
+                    return 'semantic_update'
+            
+            # 如果是查询生成，根据查询类型细分
+            elif tool_name == 'query_generation':
+                query_type = context.get('query_type', '')
+                if query_type in ['find', 'count']:
+                    return 'query_basic'
+                elif query_type in ['aggregate', 'distinct']:
+                    return 'query_advanced'
+        
+        return base_stage
+    
+    async def execute_tool(self, tool_name: str, arguments: Dict[str, Any], 
+                          context_manager: Any = None) -> Dict[str, Any]:
+        """执行工具并更新工作流状态"""
+        try:
+            # 获取工具对应的阶段（支持灵活映射）
+            stage = self.get_flexible_stage_mapping(tool_name, arguments)
+            
+            # 预处理参数
+            processed_arguments = await self._preprocess_arguments(tool_name, arguments, context_manager)
+            
+            # 执行工具
+            result = await self._execute_tool_with_context(tool_name, processed_arguments, context_manager)
+            
+            return result
+            
+        except Exception as e:
+            raise
+    
+    async def _preprocess_arguments(self, tool_name: str, arguments: Dict[str, Any], 
+                                  context_manager: Any = None) -> Dict[str, Any]:
+        """预处理参数，确保参数顺序和类型正确"""
+        processed = arguments.copy()
+        
+        # 类型转换
+        if 'limit' in processed and isinstance(processed['limit'], str):
+            try:
+                processed['limit'] = int(processed['limit'])
+            except ValueError:
+                processed['limit'] = 10  # 默认值
+        
+        if 'skip' in processed and isinstance(processed['skip'], str):
+            try:
+                processed['skip'] = int(processed['skip'])
+            except ValueError:
+                processed['skip'] = 0  # 默认值
+        
+        # 从上下文推断缺失参数
+        if context_manager and hasattr(context_manager, 'infer_missing_parameters'):
+            inferred = context_manager.infer_missing_parameters()
+            for key, value in inferred.items():
+                if key not in processed or processed[key] is None:
+                    processed[key] = value
+        
+        return processed
+    
+    async def _execute_tool_with_context(self, tool_name: str, arguments: Dict[str, Any], 
+                                       context_manager: Any = None) -> Dict[str, Any]:
+        """带上下文的工具执行"""
+        # 这里应该调用实际的工具执行逻辑
+        # 暂时返回一个模拟结果
+        return {
+            'tool': tool_name,
+            'arguments': arguments,
+            'status': 'success',
+            'timestamp': datetime.now().isoformat()
+        }
 
 
 # 全局工作流管理器实例

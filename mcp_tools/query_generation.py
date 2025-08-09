@@ -19,6 +19,7 @@ from utils.parameter_validator import (
     validate_instance_exists, validate_database_exists, validate_collection_exists
 )
 from utils.tool_context import get_context_manager, ToolExecutionContext
+from utils.error_handler import with_error_handling, with_retry, RetryConfig
 
 
 logger = structlog.get_logger(__name__)
@@ -247,6 +248,8 @@ class QueryGenerationTool:
         
         return validator
 
+    @with_error_handling({"component": "query_generation", "operation": "execute"})
+    @with_retry(RetryConfig(max_attempts=2, base_delay=1.0))
     async def execute(self, arguments: Dict[str, Any]) -> List[TextContent]:
         """执行查询生成"""
         # 参数验证和智能补全
@@ -359,6 +362,7 @@ class QueryGenerationTool:
             )
             return [TextContent(type="text", text=error_msg)]
     
+    @with_error_handling({"component": "query_generation", "operation": "validate_target"})
     async def _validate_target(self, instance_id: str, database_name: str, collection_name: str) -> Optional[str]:
         """验证目标实例和集合"""
         # 验证实例
@@ -383,6 +387,7 @@ class QueryGenerationTool:
         
         return None
     
+    @with_error_handling({"component": "query_generation", "operation": "analyze_query"})
     async def _analyze_query_description(self, description: str, fields: List[Dict[str, Any]], 
                                        query_type: str) -> Dict[str, Any]:
         """分析查询描述"""
@@ -868,6 +873,8 @@ class QueryGenerationTool:
         
         return group_fields
     
+    @with_error_handling({"component": "query_generation", "operation": "generate_query"})
+    @with_retry(RetryConfig(max_attempts=2, base_delay=1.0))
     async def _generate_query(self, analysis: Dict[str, Any], fields: List[Dict[str, Any]], 
                             limit: int) -> Dict[str, Any]:
         """生成查询语句"""
@@ -888,6 +895,7 @@ class QueryGenerationTool:
         except Exception as e:
             return {"error": f"生成查询时发生错误: {str(e)}"}
     
+    @with_error_handling({"component": "query_generation", "operation": "generate_find_query"})
     def _generate_find_query(self, analysis: Dict[str, Any], limit: int) -> Dict[str, Any]:
         """生成查找查询"""
         query = {}
@@ -929,6 +937,7 @@ class QueryGenerationTool:
             }
         }
     
+    @with_error_handling({"component": "query_generation", "operation": "generate_count_query"})
     def _generate_count_query(self, analysis: Dict[str, Any]) -> Dict[str, Any]:
         """生成计数查询"""
         query = {}
@@ -961,6 +970,7 @@ class QueryGenerationTool:
             }
         }
     
+    @with_error_handling({"component": "query_generation", "operation": "generate_aggregate_query"})
     def _generate_aggregate_query(self, analysis: Dict[str, Any], limit: int) -> Dict[str, Any]:
         """生成聚合查询"""
         pipeline = []
@@ -1022,6 +1032,7 @@ class QueryGenerationTool:
             }
         }
     
+    @with_error_handling({"component": "query_generation", "operation": "generate_distinct_query"})
     def _generate_distinct_query(self, analysis: Dict[str, Any], fields: List[Dict[str, Any]]) -> Dict[str, Any]:
         """生成去重查询"""
         # 选择第一个相关字段作为去重字段
@@ -1067,6 +1078,7 @@ class QueryGenerationTool:
             }
         }
     
+    @with_error_handling({"component": "query_generation", "operation": "build_query_result"})
     async def _build_query_result(self, query_result: Dict[str, Any], query_description: str,
                                 instance_id: str, database_name: str, collection_name: str,
                                 include_explanation: bool, analysis: Dict[str, Any] = None, 
@@ -1227,6 +1239,7 @@ class QueryGenerationTool:
         }
         return descriptions.get(operator, operator)
     
+    @with_error_handling({"component": "query_generation", "operation": "save_query_history"})
     async def _save_query_history(self, instance_id: str, database_name: str, collection_name: str,
                                 query_description: str, query_result: Dict[str, Any]):
         """保存查询历史"""
