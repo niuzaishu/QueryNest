@@ -27,8 +27,8 @@ class SemanticAnalyzer:
         
         # 初始化本地存储
         config = get_config()
-        self.local_storage = LocalSemanticStorage(config)
-        self.file_manager = SemanticFileManager(config)
+        self.local_storage = LocalSemanticStorage(str(config.base_path))
+        self.file_manager = SemanticFileManager(self.local_storage)
         
         # 常见字段名称模式和对应的业务含义
         self.field_patterns = {

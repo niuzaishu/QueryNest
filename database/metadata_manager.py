@@ -39,7 +39,7 @@ class MetadataManager:
         # 初始化本地存储组件
         self.config = get_config()
         self.local_storage = LocalSemanticStorage()
-        self.file_manager = SemanticFileManager()
+        self.file_manager = SemanticFileManager(self.local_storage)
     
     def _should_perform_full_scan(self, instance_name: str) -> bool:
         """判断是否应该执行全量扫描"""

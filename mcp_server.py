@@ -213,7 +213,7 @@ class QueryNestMCPServer:
             logger.info("Structure scanner initialized successfully")
             
             # 初始化语义分析器
-            self.semantic_analyzer = SemanticAnalyzer(self.metadata_manager)
+            self.semantic_analyzer = SemanticAnalyzer(self.metadata_manager, self.connection_manager)
             logger.info("Semantic analyzer initialized successfully")
             
             # 初始化MCP工具

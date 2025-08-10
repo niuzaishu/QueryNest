@@ -34,8 +34,8 @@ class UnifiedSemanticTool:
         
         # 初始化本地存储组件
         self.config = get_config()
-        self.local_storage = LocalSemanticStorage(self.config)
-        self.file_manager = SemanticFileManager(self.config)
+        self.local_storage = LocalSemanticStorage(str(self.config.base_path))
+        self.file_manager = SemanticFileManager(self.local_storage)
     
     def get_tool_definition(self) -> Tool:
         """获取工具定义"""

@@ -291,8 +291,7 @@ miniconda/
 *_debug.py
 *_minimal.py
 *_simple.*
-*_test.py
-test_*.py
+
 verify_*.py
 simulate_*.py
 check_*.py
@@ -324,3 +323,9 @@ transport_*.log
 *.perf
 *.flame
 monitoring_data/
+
+# Semantic data and indexes
+semantic_data/
+
+# Trae IDE configuration
+.trae/
