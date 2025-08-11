@@ -226,7 +226,7 @@ class WorkflowConstrainedTool:
     async def _handle_workflow_status(self, session_id: str) -> List[TextContent]:
         """处理工作流状态查询"""
         stage_info = self.workflow_manager.get_current_stage_info(session_id)
-        workflow_data = self.workflow_manager.get_workflow_data(session_id)
+        workflow_data = self.workflow_manager.get_workflow_summary(session_id)
         
         response_text = "## 📊 工作流状态\n\n"
         
@@ -339,8 +339,8 @@ class WorkflowConstrainedTool:
         
         # 根据工具类型自动推进工作流
         if self.tool_name == 'discover_instances':
-            # 发现实例后，可以进入数据库发现阶段
-            self.workflow_manager.try_advance_to_stage(session_id, WorkflowStage.DATABASE_DISCOVERY)
+            # 发现实例后，推进到实例发现阶段
+            self.workflow_manager.try_advance_to_stage(session_id, WorkflowStage.INSTANCE_DISCOVERY)
         
         elif self.tool_name == 'discover_databases':
             # 发现数据库后，可以进入集合分析阶段

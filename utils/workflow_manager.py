@@ -16,10 +16,13 @@ class WorkflowStage(Enum):
     INIT = "init"                           # 初始化
     INSTANCE_ANALYSIS = "instance_analysis" # 分析实例
     INSTANCE_SELECTION = "instance_selection" # 选择实例
+    INSTANCE_DISCOVERY = "instance_discovery" # 发现实例
     DATABASE_ANALYSIS = "database_analysis" # 分析数据库
     DATABASE_SELECTION = "database_selection" # 选择数据库
+    DATABASE_DISCOVERY = "database_discovery" # 发现数据库
     COLLECTION_ANALYSIS = "collection_analysis" # 分析集合
     COLLECTION_SELECTION = "collection_selection" # 选择集合
+    COLLECTION_DISCOVERY = "collection_discovery" # 发现集合
     FIELD_ANALYSIS = "field_analysis"       # 分析字段
     QUERY_GENERATION = "query_generation"   # 生成查询
     QUERY_REFINEMENT = "query_refinement"   # 查询优化
@@ -110,12 +113,15 @@ class WorkflowManager:
         
         # 定义阶段转换规则
         self._stage_transitions = {
-            WorkflowStage.INIT: [WorkflowStage.INSTANCE_ANALYSIS],
+            WorkflowStage.INIT: [WorkflowStage.INSTANCE_ANALYSIS, WorkflowStage.INSTANCE_DISCOVERY],
             WorkflowStage.INSTANCE_ANALYSIS: [WorkflowStage.INSTANCE_SELECTION],
-            WorkflowStage.INSTANCE_SELECTION: [WorkflowStage.DATABASE_ANALYSIS, WorkflowStage.INSTANCE_ANALYSIS],
+            WorkflowStage.INSTANCE_DISCOVERY: [WorkflowStage.INSTANCE_SELECTION],
+            WorkflowStage.INSTANCE_SELECTION: [WorkflowStage.DATABASE_ANALYSIS, WorkflowStage.DATABASE_DISCOVERY, WorkflowStage.INSTANCE_ANALYSIS],
             WorkflowStage.DATABASE_ANALYSIS: [WorkflowStage.DATABASE_SELECTION, WorkflowStage.INSTANCE_SELECTION],
-            WorkflowStage.DATABASE_SELECTION: [WorkflowStage.COLLECTION_ANALYSIS, WorkflowStage.DATABASE_ANALYSIS],
+            WorkflowStage.DATABASE_DISCOVERY: [WorkflowStage.DATABASE_SELECTION, WorkflowStage.INSTANCE_SELECTION],
+            WorkflowStage.DATABASE_SELECTION: [WorkflowStage.COLLECTION_ANALYSIS, WorkflowStage.COLLECTION_DISCOVERY, WorkflowStage.DATABASE_ANALYSIS],
             WorkflowStage.COLLECTION_ANALYSIS: [WorkflowStage.COLLECTION_SELECTION, WorkflowStage.DATABASE_SELECTION],
+            WorkflowStage.COLLECTION_DISCOVERY: [WorkflowStage.COLLECTION_SELECTION, WorkflowStage.DATABASE_SELECTION],
             WorkflowStage.COLLECTION_SELECTION: [WorkflowStage.FIELD_ANALYSIS, WorkflowStage.COLLECTION_ANALYSIS],
             WorkflowStage.FIELD_ANALYSIS: [WorkflowStage.QUERY_GENERATION, WorkflowStage.COLLECTION_SELECTION],
             WorkflowStage.QUERY_GENERATION: [WorkflowStage.QUERY_REFINEMENT, WorkflowStage.QUERY_EXECUTION, WorkflowStage.FIELD_ANALYSIS],
@@ -129,10 +135,13 @@ class WorkflowManager:
         self._stage_requirements = {
             WorkflowStage.INIT: [],
             WorkflowStage.INSTANCE_ANALYSIS: [],
+            WorkflowStage.INSTANCE_DISCOVERY: [],
             WorkflowStage.INSTANCE_SELECTION: [],
             WorkflowStage.DATABASE_ANALYSIS: ['instance_id'],
+            WorkflowStage.DATABASE_DISCOVERY: ['instance_id'],
             WorkflowStage.DATABASE_SELECTION: ['instance_id'],
             WorkflowStage.COLLECTION_ANALYSIS: ['instance_id', 'database_name'],
+            WorkflowStage.COLLECTION_DISCOVERY: ['instance_id', 'database_name'],
             WorkflowStage.COLLECTION_SELECTION: ['instance_id', 'database_name'],
             WorkflowStage.FIELD_ANALYSIS: ['instance_id', 'database_name', 'collection_name'],
             WorkflowStage.QUERY_GENERATION: ['instance_id', 'database_name', 'collection_name'],
@@ -296,15 +305,56 @@ class WorkflowManager:
             'stage_history_count': len(workflow.stage_history)
         }
     
+    def get_workflow_data(self, session_id: str) -> Dict[str, Any]:
+        """获取工作流数据（兼容性方法，与get_workflow_summary相同）"""
+        return self.get_workflow_summary(session_id)
+    
+    def try_advance_to_stage(self, session_id: str, target_stage: WorkflowStage, 
+                           update_data: Optional[Dict[str, Any]] = None) -> Tuple[bool, str]:
+        """尝试推进到目标阶段（兼容性方法，与transition_to相同）"""
+        return self.transition_to(session_id, target_stage, update_data)
+    
+    def update_workflow_data(self, session_id: str, update_data: Dict[str, Any]) -> bool:
+        """更新工作流数据"""
+        try:
+            workflow = self.get_workflow(session_id)
+            if not workflow:
+                logger.warning(f"Workflow not found for session {session_id}")
+                return False
+            
+            # 更新工作流状态中的数据
+            for key, value in update_data.items():
+                if hasattr(workflow, key):
+                    setattr(workflow, key, value)
+                    logger.debug(f"Updated workflow {session_id}: {key} = {value}")
+            
+            # 更新时间戳
+            workflow.updated_at = datetime.now()
+            
+            # 保存更新后的工作流状态
+            self.workflows[session_id] = workflow
+            
+            logger.info(f"Successfully updated workflow data for session {session_id}", 
+                       extra={"session_id": session_id, "updates": update_data})
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to update workflow data for session {session_id}: {e}", 
+                        extra={"session_id": session_id, "error": str(e)})
+            return False
+    
     def _get_stage_name(self, stage: WorkflowStage) -> str:
         """获取阶段中文名称"""
         stage_names = {
             WorkflowStage.INIT: "初始化",
             WorkflowStage.INSTANCE_ANALYSIS: "分析实例",
+            WorkflowStage.INSTANCE_DISCOVERY: "发现实例",
             WorkflowStage.INSTANCE_SELECTION: "选择实例",
             WorkflowStage.DATABASE_ANALYSIS: "分析数据库",
+            WorkflowStage.DATABASE_DISCOVERY: "发现数据库",
             WorkflowStage.DATABASE_SELECTION: "选择数据库",
             WorkflowStage.COLLECTION_ANALYSIS: "分析集合",
+            WorkflowStage.COLLECTION_DISCOVERY: "发现集合",
             WorkflowStage.COLLECTION_SELECTION: "选择集合",
             WorkflowStage.FIELD_ANALYSIS: "分析字段",
             WorkflowStage.QUERY_GENERATION: "生成查询",
@@ -320,10 +370,13 @@ class WorkflowManager:
         descriptions = {
             WorkflowStage.INIT: "开始新的查询会话",
             WorkflowStage.INSTANCE_ANALYSIS: "分析可用的MongoDB实例并更新语义库",
+            WorkflowStage.INSTANCE_DISCOVERY: "发现可用的MongoDB实例",
             WorkflowStage.INSTANCE_SELECTION: "选择要查询的MongoDB实例",
             WorkflowStage.DATABASE_ANALYSIS: "分析实例中的数据库并更新语义库",
+            WorkflowStage.DATABASE_DISCOVERY: "发现实例中的数据库",
             WorkflowStage.DATABASE_SELECTION: "选择要查询的数据库",
             WorkflowStage.COLLECTION_ANALYSIS: "分析数据库中的集合并更新语义库",
+            WorkflowStage.COLLECTION_DISCOVERY: "发现数据库中的集合",
             WorkflowStage.COLLECTION_SELECTION: "选择要查询的集合",
             WorkflowStage.FIELD_ANALYSIS: "分析集合中的字段结构并更新语义库",
             WorkflowStage.QUERY_GENERATION: "基于需求生成MongoDB查询语句",
@@ -352,9 +405,9 @@ class WorkflowManager:
         # 定义工具与阶段的映射关系
         tool_stage_mapping = {
             'discover_instances': [WorkflowStage.INIT, WorkflowStage.INSTANCE_ANALYSIS],
-            'select_instance': [WorkflowStage.INSTANCE_SELECTION],
-            'discover_databases': [WorkflowStage.DATABASE_ANALYSIS],
-            'select_database': [WorkflowStage.DATABASE_SELECTION],
+            'select_instance': [WorkflowStage.INSTANCE_DISCOVERY],
+            'select_database': [WorkflowStage.INSTANCE_SELECTION],
+            'discover_databases': [WorkflowStage.INSTANCE_SELECTION, WorkflowStage.DATABASE_ANALYSIS],
             'analyze_collection': [WorkflowStage.COLLECTION_ANALYSIS],
             'select_collection': [WorkflowStage.COLLECTION_SELECTION],
             'analyze_fields': [WorkflowStage.FIELD_ANALYSIS],
@@ -386,13 +439,15 @@ class WorkflowManager:
     def _get_stage_for_tool(self, tool_name: str) -> str:
         """根据工具名称获取对应的工作流阶段"""
         stage_mapping = {
-            'instance_discovery': 'discovery',
-            'database_discovery': 'discovery', 
+            'discover_instances': 'discovery',
+            'discover_databases': 'discovery', 
             'collection_analysis': 'analysis',
             'query_generation': 'generation',
             'unified_semantic': 'semantic_analysis',
             'workflow_status': 'management',
-            'reset_workflow': 'management'
+            'workflow_reset': 'management',
+            'select_instance': 'discovery',
+            'select_database': 'selection'
         }
         return stage_mapping.get(tool_name, 'execution')
     

@@ -213,10 +213,10 @@ class ErrorHandler:
         
         querynest_error = QueryNestError(
             message=str(error),
-            error_type=error_type,
             severity=self._determine_severity(error),
             details={
                 'original_type': type(error).__name__,
+                'error_type': error_type.value,
                 'traceback': traceback.format_exc()
             }
         )
@@ -409,7 +409,17 @@ def with_error_handling(context: Optional[dict] = None):
                 try:
                     return await func(*args, **kwargs)
                 except Exception as e:
-                    qn_error = error_handler.handle_error(e, context)
+                    # 如果已经是QueryNestError，直接抛出
+                    if isinstance(e, QueryNestError):
+                        raise e
+                    # 否则处理错误并创建新的QueryNestError
+                    error_response = error_handler.handle_error(e, context)
+                    qn_error = QueryNestError(
+                        message=error_response.get('message', str(e)),
+                        severity=ErrorSeverity(error_response.get('severity', 'medium')),
+                        details=error_response.get('details', {}),
+                        cause=e
+                    )
                     raise qn_error
             return async_wrapper
         else:
@@ -418,7 +428,17 @@ def with_error_handling(context: Optional[dict] = None):
                 try:
                     return func(*args, **kwargs)
                 except Exception as e:
-                    qn_error = error_handler.handle_error(e, context)
+                    # 如果已经是QueryNestError，直接抛出
+                    if isinstance(e, QueryNestError):
+                        raise e
+                    # 否则处理错误并创建新的QueryNestError
+                    error_response = error_handler.handle_error(e, context)
+                    qn_error = QueryNestError(
+                        message=error_response.get('message', str(e)),
+                        severity=ErrorSeverity(error_response.get('severity', 'medium')),
+                        details=error_response.get('details', {}),
+                        cause=e
+                    )
                     raise qn_error
             return sync_wrapper
     return decorator

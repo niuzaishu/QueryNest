@@ -23,6 +23,8 @@ from scanner.structure_scanner import StructureScanner
 from scanner.semantic_analyzer import SemanticAnalyzer
 from mcp_tools import (
     InstanceDiscoveryTool,
+    InstanceSelectionTool,
+    DatabaseSelectionTool,
     DatabaseDiscoveryTool,
     CollectionAnalysisTool,
     QueryGenerationTool,
@@ -234,6 +236,8 @@ class QueryNestMCPServer:
         """初始化MCP工具（带工作流约束）"""
         # 创建原始工具实例
         instance_discovery = InstanceDiscoveryTool(self.connection_manager, self.metadata_manager)
+        instance_selection = InstanceSelectionTool(self.connection_manager, self.metadata_manager)
+        database_selection = DatabaseSelectionTool(self.connection_manager, self.metadata_manager)
         database_discovery = DatabaseDiscoveryTool(self.connection_manager, self.metadata_manager)
         collection_analysis = CollectionAnalysisTool(
             self.connection_manager, self.metadata_manager, self.semantic_analyzer
@@ -257,6 +261,12 @@ class QueryNestMCPServer:
         # 包装主要工具以添加工作流约束
         self.tools["discover_instances"] = WorkflowConstrainedTool(
             instance_discovery, "discover_instances"
+        )
+        self.tools["select_instance"] = WorkflowConstrainedTool(
+            instance_selection, "select_instance"
+        )
+        self.tools["select_database"] = WorkflowConstrainedTool(
+            database_selection, "select_database"
         )
         self.tools["discover_databases"] = WorkflowConstrainedTool(
             database_discovery, "discover_databases"

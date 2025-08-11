@@ -100,7 +100,7 @@ logging:
   output:
     # 文件输出
     file:
-      enabled: false
+      enabled: true
       path: "logs/querynest.log"
       level: "DEBUG"
       max_size: "100MB"

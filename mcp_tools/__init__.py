@@ -2,6 +2,8 @@
 """MCP工具模块"""
 
 from .instance_discovery import InstanceDiscoveryTool
+from .instance_selection import InstanceSelectionTool
+from .database_selection import DatabaseSelectionTool
 from .database_discovery import DatabaseDiscoveryTool
 from .collection_analysis import CollectionAnalysisTool
 from .query_generation import QueryGenerationTool
@@ -12,6 +14,7 @@ from .unified_semantic_tool import UnifiedSemanticTool
 
 __all__ = [
     "InstanceDiscoveryTool",
+    "InstanceSelectionTool",
     "DatabaseDiscoveryTool",
     "CollectionAnalysisTool",
     "QueryGenerationTool",
