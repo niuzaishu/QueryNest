@@ -341,7 +341,7 @@ class SemanticAnalyzer:
                     try:
                         # 使用新的本地存储保存字段语义
                         success = await self.save_field_semantics(
-                            instance_id, ObjectId(), database_name, collection_name,
+                            instance_id, database_name, collection_name,
                             field_path, analysis["suggested_meaning"]
                         )
                         if success:
@@ -461,7 +461,7 @@ class SemanticAnalyzer:
         
         return suggestions[:10]  # 返回前10个最相关的字段
     
-    async def save_field_semantics(self, instance_name: str, instance_id: ObjectId, 
+    async def save_field_semantics(self, instance_name: str, 
                                  database_name: str, collection_name: str, 
                                  field_path: str, business_meaning: str, 
                                  examples: List[str] = None) -> bool:
@@ -483,27 +483,27 @@ class SemanticAnalyzer:
             )
             
             if success:
-                 self.logger.info(
-                     "字段语义已保存到本地文件",
-                     instance=instance_name,
-                     database=database_name,
-                     collection=collection_name,
-                     field=field_path,
-                     meaning=business_meaning
-                 )
+                logger.info(
+                    "字段语义已保存到本地文件",
+                    instance=instance_name,
+                    database=database_name,
+                    collection=collection_name,
+                    field=field_path,
+                    meaning=business_meaning
+                )
             
             return success
             
         except Exception as e:
-             self.logger.error(
-                 "保存字段语义失败",
-                 instance=instance_name,
-                 database=database_name,
-                 collection=collection_name,
-                 field=field_path,
-                 error=str(e)
-             )
-             return False
+            logger.error(
+                "保存字段语义失败",
+                instance=instance_name,
+                database=database_name,
+                collection=collection_name,
+                field=field_path,
+                error=str(e)
+            )
+            return False
     
     async def search_semantics(self, instance_name: str, search_term: str) -> List[Dict[str, Any]]:
         """搜索语义信息"""
@@ -515,20 +515,20 @@ class SemanticAnalyzer:
                 instance_name, search_term
             )
             
-            self.logger.info(
-                 "语义搜索完成",
-                 instance=instance_name,
-                 search_term=search_term,
-                 total_results_count=len(results)
-             )
+            logger.info(
+                "语义搜索完成",
+                instance=instance_name,
+                search_term=search_term,
+                total_results_count=len(results)
+            )
             
             return results
             
         except Exception as e:
-             self.logger.error(
-                 "语义搜索失败",
-                 instance=instance_name,
-                 search_term=search_term,
-                 error=str(e)
-             )
-             return []
+            logger.error(
+                "语义搜索失败",
+                instance=instance_name,
+                search_term=search_term,
+                error=str(e)
+            )
+            return []

@@ -81,8 +81,47 @@ class QueryNestError(Exception):
             "details": self.details,
             "timestamp": self.timestamp.isoformat(),
             "trace_id": self.trace_id,
-            "cause": str(self.cause) if self.cause else None
+            "cause": str(self.cause) if self.cause else None,
+            "recovery_suggestions": self.get_recovery_suggestions()
         }
+    
+    def get_recovery_suggestions(self) -> List[str]:
+        """获取错误恢复建议"""
+        suggestions = []
+        
+        if self.category == ErrorCategory.CONNECTION:
+            suggestions.extend([
+                "检查网络连接是否正常",
+                "验证MongoDB服务是否运行",
+                "确认连接字符串是否正确",
+                "检查防火墙设置"
+            ])
+        elif self.category == ErrorCategory.AUTHENTICATION:
+            suggestions.extend([
+                "检查用户名和密码是否正确",
+                "验证用户是否有相应权限",
+                "确认认证数据库是否正确"
+            ])
+        elif self.category == ErrorCategory.VALIDATION:
+            suggestions.extend([
+                "检查输入参数格式是否正确",
+                "验证必需字段是否已提供",
+                "确认参数值是否在有效范围内"
+            ])
+        elif self.category == ErrorCategory.TIMEOUT:
+            suggestions.extend([
+                "尝试增加超时时间",
+                "检查查询是否过于复杂",
+                "验证数据库性能是否正常"
+            ])
+        elif self.category == ErrorCategory.RESOURCE:
+            suggestions.extend([
+                "检查系统资源使用情况",
+                "清理临时文件和缓存",
+                "考虑增加系统资源配置"
+            ])
+        
+        return suggestions
 
 
 class ConnectionError(QueryNestError):
@@ -548,3 +587,249 @@ def collect_user_feedback(
 def initialize(config: Dict[str, Any]):
     """初始化全局错误处理器"""
     error_handler.initialize(config)
+
+
+class ErrorRecoveryManager:
+    """智能错误恢复管理器"""
+    
+    def __init__(self):
+        self.recovery_strategies = {}
+        self.failure_patterns = {}
+        self.success_patterns = {}
+        self._setup_default_strategies()
+    
+    def _setup_default_strategies(self):
+        """设置默认恢复策略"""
+        
+        # 连接错误恢复策略
+        self.recovery_strategies[ErrorCategory.CONNECTION] = [
+            {
+                "name": "connection_retry",
+                "description": "重试连接",
+                "action": self._retry_connection,
+                "max_attempts": 3,
+                "delay": 2.0
+            },
+            {
+                "name": "fallback_instance",
+                "description": "切换到备用实例",
+                "action": self._try_fallback_instance,
+                "max_attempts": 1,
+                "delay": 0.5
+            }
+        ]
+        
+        # 超时错误恢复策略
+        self.recovery_strategies[ErrorCategory.TIMEOUT] = [
+            {
+                "name": "increase_timeout",
+                "description": "增加超时时间",
+                "action": self._increase_timeout,
+                "max_attempts": 2,
+                "delay": 1.0
+            },
+            {
+                "name": "simplify_query",
+                "description": "简化查询",
+                "action": self._simplify_query,
+                "max_attempts": 1,
+                "delay": 0.5
+            }
+        ]
+        
+        # 验证错误恢复策略
+        self.recovery_strategies[ErrorCategory.VALIDATION] = [
+            {
+                "name": "auto_fix_params",
+                "description": "自动修复参数",
+                "action": self._auto_fix_parameters,
+                "max_attempts": 1,
+                "delay": 0.1
+            }
+        ]
+    
+    async def attempt_recovery(self, error: QueryNestError, context: Dict[str, Any]) -> Dict[str, Any]:
+        """尝试错误恢复"""
+        recovery_result = {
+            "recovered": False,
+            "strategy_used": None,
+            "attempts": 0,
+            "final_error": None,
+            "recovery_log": []
+        }
+        
+        # 获取该错误类别的恢复策略
+        strategies = self.recovery_strategies.get(error.category, [])
+        
+        for strategy in strategies:
+            recovery_result["attempts"] += 1
+            
+            try:
+                logger.info(f"尝试恢复策略: {strategy['name']}", 
+                           trace_id=error.trace_id)
+                
+                # 执行恢复策略
+                result = await strategy["action"](error, context)
+                
+                if result.get("success", False):
+                    recovery_result["recovered"] = True
+                    recovery_result["strategy_used"] = strategy["name"]
+                    recovery_result["recovery_log"].append({
+                        "strategy": strategy["name"],
+                        "success": True,
+                        "result": result
+                    })
+                    
+                    logger.info(f"恢复成功: {strategy['name']}", 
+                               trace_id=error.trace_id)
+                    break
+                else:
+                    recovery_result["recovery_log"].append({
+                        "strategy": strategy["name"],
+                        "success": False,
+                        "error": result.get("error", "Unknown error")
+                    })
+                    
+                    # 等待后重试
+                    if strategy.get("delay", 0) > 0:
+                        await asyncio.sleep(strategy["delay"])
+                        
+            except Exception as e:
+                recovery_result["recovery_log"].append({
+                    "strategy": strategy["name"],
+                    "success": False,
+                    "error": str(e)
+                })
+                logger.error(f"恢复策略执行失败: {strategy['name']}", 
+                           error=str(e), trace_id=error.trace_id)
+        
+        if not recovery_result["recovered"]:
+            recovery_result["final_error"] = error.to_dict()
+        
+        return recovery_result
+    
+    async def _retry_connection(self, error: QueryNestError, context: Dict[str, Any]) -> Dict[str, Any]:
+        """重试连接策略"""
+        try:
+            # 模拟重试连接逻辑
+            connection_manager = context.get("connection_manager")
+            instance_name = context.get("instance_name")
+            
+            if connection_manager and instance_name:
+                # 重新初始化连接
+                success = await connection_manager.init_instance_metadata_on_demand(instance_name)
+                if success:
+                    return {"success": True, "message": "连接重试成功"}
+            
+            return {"success": False, "error": "无法重试连接"}
+            
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    
+    async def _try_fallback_instance(self, error: QueryNestError, context: Dict[str, Any]) -> Dict[str, Any]:
+        """切换到备用实例策略"""
+        try:
+            connection_manager = context.get("connection_manager")
+            
+            if connection_manager:
+                # 获取可用实例列表
+                available_instances = connection_manager.get_available_instances()
+                current_instance = context.get("instance_name")
+                
+                # 找到第一个可用的备用实例
+                for instance in available_instances:
+                    if instance != current_instance:
+                        context["instance_name"] = instance
+                        return {"success": True, "message": f"切换到备用实例: {instance}"}
+            
+            return {"success": False, "error": "没有可用的备用实例"}
+            
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    
+    async def _increase_timeout(self, error: QueryNestError, context: Dict[str, Any]) -> Dict[str, Any]:
+        """增加超时时间策略"""
+        try:
+            current_timeout = context.get("timeout", 30)
+            new_timeout = min(current_timeout * 2, 120)  # 最大120秒
+            context["timeout"] = new_timeout
+            
+            return {"success": True, "message": f"超时时间增加到 {new_timeout} 秒"}
+            
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    
+    async def _simplify_query(self, error: QueryNestError, context: Dict[str, Any]) -> Dict[str, Any]:
+        """简化查询策略"""
+        try:
+            query = context.get("query", {})
+            
+            # 简化查询的一些策略
+            if "$and" in query and len(query["$and"]) > 1:
+                # 减少AND条件数量
+                query["$and"] = query["$and"][:1]
+                context["query"] = query
+                return {"success": True, "message": "简化了查询条件"}
+            
+            if "limit" not in context or context.get("limit", 0) > 100:
+                # 减少查询结果数量
+                context["limit"] = 50
+                return {"success": True, "message": "减少了查询结果数量"}
+            
+            return {"success": False, "error": "无法进一步简化查询"}
+            
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    
+    async def _auto_fix_parameters(self, error: QueryNestError, context: Dict[str, Any]) -> Dict[str, Any]:
+        """自动修复参数策略"""
+        try:
+            # 一些常见的参数修复策略
+            fixed_params = []
+            
+            # 修复空字符串
+            for key, value in context.items():
+                if isinstance(value, str) and value.strip() == "":
+                    context[key] = None
+                    fixed_params.append(f"{key}: 空字符串->None")
+            
+            # 修复负数限制
+            if "limit" in context and context["limit"] < 0:
+                context["limit"] = 10
+                fixed_params.append("limit: 负数->10")
+            
+            if fixed_params:
+                return {"success": True, "message": f"修复了参数: {', '.join(fixed_params)}"}
+            
+            return {"success": False, "error": "没有需要修复的参数"}
+            
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    
+    def add_custom_strategy(self, category: ErrorCategory, strategy: Dict[str, Any]):
+        """添加自定义恢复策略"""
+        if category not in self.recovery_strategies:
+            self.recovery_strategies[category] = []
+        
+        self.recovery_strategies[category].append(strategy)
+        logger.info(f"添加了自定义恢复策略: {strategy['name']}", category=category.value)
+    
+    def get_recovery_statistics(self) -> Dict[str, Any]:
+        """获取恢复统计信息"""
+        return {
+            "total_strategies": sum(len(strategies) for strategies in self.recovery_strategies.values()),
+            "categories_covered": len(self.recovery_strategies),
+            "strategies_by_category": {
+                category.value: len(strategies) 
+                for category, strategies in self.recovery_strategies.items()
+            }
+        }
+
+
+# 全局错误恢复管理器实例
+recovery_manager = ErrorRecoveryManager()
+
+
+def get_recovery_manager() -> ErrorRecoveryManager:
+    """获取全局错误恢复管理器"""
+    return recovery_manager

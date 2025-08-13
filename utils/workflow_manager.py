@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 import json
 import structlog
-from datetime import datetime
+from datetime import datetime, timedelta
 
 logger = structlog.get_logger(__name__)
 
@@ -108,8 +108,10 @@ class WorkflowState:
 class WorkflowManager:
     """工作流管理器"""
     
-    def __init__(self):
-        self._workflows: Dict[str, WorkflowState] = {}
+    def __init__(self, storage=None):
+        self._workflows: Dict[str, WorkflowState] = {}  # 内存缓存
+        self.storage = storage  # 持久化存储
+        self._cache_expiry = {}  # 缓存过期时间
         
         # 定义阶段转换规则
         self._stage_transitions = {
@@ -151,30 +153,48 @@ class WorkflowManager:
             WorkflowStage.COMPLETED: []
         }
     
-    def create_workflow(self, session_id: str) -> WorkflowState:
+    async def create_workflow(self, session_id: str) -> WorkflowState:
         """创建新的工作流"""
         workflow = WorkflowState(
             current_stage=WorkflowStage.INIT,
             session_id=session_id
         )
+        
+        # 存储到缓存和持久化存储
         self._workflows[session_id] = workflow
+        if self.storage:
+            await self.storage.save_workflow_state(workflow)
+        
         logger.info("创建新工作流", session_id=session_id)
         return workflow
     
-    def get_workflow(self, session_id: str) -> Optional[WorkflowState]:
+    async def get_workflow(self, session_id: str) -> Optional[WorkflowState]:
         """获取工作流状态"""
-        return self._workflows.get(session_id)
+        # 先从缓存获取
+        if session_id in self._workflows:
+            return self._workflows[session_id]
+        
+        # 缓存中没有，尝试从持久化存储加载
+        if self.storage:
+            workflow = await self.storage.load_workflow_state(session_id)
+            if workflow:
+                # 加载到缓存
+                self._workflows[session_id] = workflow
+                logger.debug("从持久化存储加载工作流", session_id=session_id)
+                return workflow
+        
+        return None
     
-    def get_or_create_workflow(self, session_id: str) -> WorkflowState:
+    async def get_or_create_workflow(self, session_id: str) -> WorkflowState:
         """获取或创建工作流"""
-        workflow = self.get_workflow(session_id)
+        workflow = await self.get_workflow(session_id)
         if workflow is None:
-            workflow = self.create_workflow(session_id)
+            workflow = await self.create_workflow(session_id)
         return workflow
     
-    def can_transition_to(self, session_id: str, target_stage: WorkflowStage) -> Tuple[bool, str]:
+    async def can_transition_to(self, session_id: str, target_stage: WorkflowStage) -> Tuple[bool, str]:
         """检查是否可以转换到目标阶段"""
-        workflow = self.get_workflow(session_id)
+        workflow = await self.get_workflow(session_id)
         if not workflow:
             return False, "工作流不存在"
         
@@ -193,15 +213,17 @@ class WorkflowManager:
         
         return True, "可以转换"
     
-    def transition_to(self, session_id: str, target_stage: WorkflowStage, 
-                     update_data: Optional[Dict[str, Any]] = None) -> Tuple[bool, str]:
+    async def transition_to(self, session_id: str, target_stage: WorkflowStage, 
+                           update_data: Optional[Dict[str, Any]] = None) -> Tuple[bool, str]:
         """转换到目标阶段"""
-        can_transition, message = self.can_transition_to(session_id, target_stage)
+        can_transition, message = await self.can_transition_to(session_id, target_stage)
         
         if not can_transition:
             return False, message
         
-        workflow = self._workflows[session_id]
+        workflow = await self.get_workflow(session_id)
+        if not workflow:
+            return False, "工作流不存在"
         
         # 记录历史
         workflow.stage_history.append(workflow.current_stage)
@@ -218,15 +240,19 @@ class WorkflowManager:
                 else:
                     workflow.stage_data[key] = value
         
+        # 保存到持久化存储
+        if self.storage:
+            await self.storage.save_workflow_state(workflow)
+        
         logger.info("工作流阶段转换", 
                    session_id=session_id, 
                    target_stage=target_stage.value)
         
         return True, f"已转换到 {target_stage.value} 阶段"
     
-    def get_next_stage_suggestions(self, session_id: str) -> List[Dict[str, str]]:
+    async def get_next_stage_suggestions(self, session_id: str) -> List[Dict[str, str]]:
         """获取下一阶段建议"""
-        workflow = self.get_workflow(session_id)
+        workflow = await self.get_workflow(session_id)
         if not workflow:
             return []
         
@@ -235,7 +261,7 @@ class WorkflowManager:
         
         suggestions = []
         for stage in allowed_transitions:
-            can_transition, message = self.can_transition_to(session_id, stage)
+            can_transition, message = await self.can_transition_to(session_id, stage)
             
             suggestions.append({
                 'stage': stage.value,
@@ -247,9 +273,9 @@ class WorkflowManager:
         
         return suggestions
     
-    def get_current_stage_info(self, session_id: str) -> Dict[str, Any]:
+    async def get_current_stage_info(self, session_id: str) -> Dict[str, Any]:
         """获取当前阶段信息"""
-        workflow = self.get_workflow(session_id)
+        workflow = await self.get_workflow(session_id)
         if not workflow:
             return {}
         
@@ -269,24 +295,30 @@ class WorkflowManager:
             'requirements': requirements,
             'missing_data': missing_data,
             'is_complete': len(missing_data) == 0,
-            'next_suggestions': self.get_next_stage_suggestions(session_id),
+            'next_suggestions': await self.get_next_stage_suggestions(session_id),
             'progress': self._calculate_progress(workflow)
         }
     
-    def reset_workflow(self, session_id: str) -> bool:
+    async def reset_workflow(self, session_id: str) -> bool:
         """重置工作流"""
         if session_id in self._workflows:
-            self._workflows[session_id] = WorkflowState(
+            workflow = WorkflowState(
                 current_stage=WorkflowStage.INIT,
                 session_id=session_id
             )
+            self._workflows[session_id] = workflow
+            
+            # 同时更新持久化存储
+            if self.storage:
+                await self.storage.save_workflow_state(workflow)
+            
             logger.info("工作流已重置", session_id=session_id)
             return True
         return False
     
-    def get_workflow_summary(self, session_id: str) -> Dict[str, Any]:
+    async def get_workflow_summary(self, session_id: str) -> Dict[str, Any]:
         """获取工作流摘要"""
-        workflow = self.get_workflow(session_id)
+        workflow = await self.get_workflow(session_id)
         if not workflow:
             return {}
         
@@ -305,19 +337,19 @@ class WorkflowManager:
             'stage_history_count': len(workflow.stage_history)
         }
     
-    def get_workflow_data(self, session_id: str) -> Dict[str, Any]:
+    async def get_workflow_data(self, session_id: str) -> Dict[str, Any]:
         """获取工作流数据（兼容性方法，与get_workflow_summary相同）"""
-        return self.get_workflow_summary(session_id)
+        return await self.get_workflow_summary(session_id)
     
-    def try_advance_to_stage(self, session_id: str, target_stage: WorkflowStage, 
+    async def try_advance_to_stage(self, session_id: str, target_stage: WorkflowStage, 
                            update_data: Optional[Dict[str, Any]] = None) -> Tuple[bool, str]:
         """尝试推进到目标阶段（兼容性方法，与transition_to相同）"""
-        return self.transition_to(session_id, target_stage, update_data)
+        return await self.transition_to(session_id, target_stage, update_data)
     
-    def update_workflow_data(self, session_id: str, update_data: Dict[str, Any]) -> bool:
+    async def update_workflow_data(self, session_id: str, update_data: Dict[str, Any]) -> bool:
         """更新工作流数据"""
         try:
-            workflow = self.get_workflow(session_id)
+            workflow = await self.get_workflow(session_id)
             if not workflow:
                 logger.warning(f"Workflow not found for session {session_id}")
                 return False
@@ -332,7 +364,11 @@ class WorkflowManager:
             workflow.updated_at = datetime.now()
             
             # 保存更新后的工作流状态
-            self.workflows[session_id] = workflow
+            self._workflows[session_id] = workflow
+            
+            # 同时更新持久化存储
+            if self.storage:
+                await self.storage.save_workflow_state(workflow)
             
             logger.info(f"Successfully updated workflow data for session {session_id}", 
                        extra={"session_id": session_id, "updates": update_data})
@@ -393,12 +429,12 @@ class WorkflowManager:
         current_index = all_stages.index(workflow.current_stage)
         return round(current_index / (len(all_stages) - 1) * 100, 1)
     
-    def validate_tool_call(self, session_id: str, tool_name: str) -> Tuple[bool, str, Dict[str, Any]]:
+    async def validate_tool_call(self, session_id: str, tool_name: str) -> Tuple[bool, str, Dict[str, Any]]:
         """验证工具调用是否符合当前工作流阶段"""
-        workflow = self.get_workflow(session_id)
+        workflow = await self.get_workflow(session_id)
         if not workflow:
             # 如果没有工作流，创建一个新的
-            workflow = self.create_workflow(session_id)
+            workflow = await self.create_workflow(session_id)
         
         current_stage = workflow.current_stage
         
@@ -423,18 +459,18 @@ class WorkflowManager:
         
         # 特殊工具可以在任何阶段调用
         if not allowed_stages:
-            return True, "工具调用允许", self.get_current_stage_info(session_id)
+            return True, "工具调用允许", await self.get_current_stage_info(session_id)
         
         if current_stage not in allowed_stages:
             expected_stages = [self._get_stage_name(stage) for stage in allowed_stages]
-            current_stage_info = self.get_current_stage_info(session_id)
+            current_stage_info = await self.get_current_stage_info(session_id)
             
             return False, (
                 f"当前阶段 '{self._get_stage_name(current_stage)}' 不允许调用工具 '{tool_name}'。\n"
                 f"该工具应在以下阶段调用: {', '.join(expected_stages)}"
             ), current_stage_info
         
-        return True, "工具调用符合流程要求", self.get_current_stage_info(session_id)
+        return True, "工具调用符合流程要求", await self.get_current_stage_info(session_id)
     
     def _get_stage_for_tool(self, tool_name: str) -> str:
         """根据工具名称获取对应的工作流阶段"""
@@ -532,6 +568,109 @@ class WorkflowManager:
             'status': 'success',
             'timestamp': datetime.now().isoformat()
         }
+    
+    async def delete_workflow(self, session_id: str) -> bool:
+        """删除工作流状态"""
+        try:
+            # 从缓存中删除
+            if session_id in self._workflows:
+                del self._workflows[session_id]
+            
+            # 从持久化存储中删除
+            if self.storage:
+                success = await self.storage.delete_workflow_state(session_id)
+                if success:
+                    logger.info("工作流状态已删除", session_id=session_id)
+                return success
+            
+            return True
+            
+        except Exception as e:
+            logger.error("删除工作流状态失败", session_id=session_id, error=str(e))
+            return False
+    
+    async def list_all_workflows(self) -> List[Dict[str, Any]]:
+        """列出所有工作流状态"""
+        try:
+            workflows = []
+            
+            # 获取缓存中的工作流
+            for session_id, workflow in self._workflows.items():
+                workflows.append({
+                    "session_id": session_id,
+                    "current_stage": workflow.current_stage.value,
+                    "created_at": workflow.created_at,
+                    "updated_at": workflow.updated_at,
+                    "source": "cache"
+                })
+            
+            # 如果有持久化存储，获取存储中的工作流
+            if self.storage:
+                stored_sessions = await self.storage.list_sessions()
+                for session_info in stored_sessions:
+                    # 避免重复添加已经在缓存中的会话
+                    if session_info["session_id"] not in self._workflows:
+                        workflows.append({
+                            **session_info,
+                            "source": "storage"
+                        })
+            
+            return sorted(workflows, key=lambda x: x.get("updated_at", ""), reverse=True)
+            
+        except Exception as e:
+            logger.error("列出工作流状态失败", error=str(e))
+            return []
+    
+    async def cleanup_expired_workflows(self, max_age_hours: int = 24) -> int:
+        """清理过期的工作流状态"""
+        try:
+            cleaned_count = 0
+            
+            # 清理缓存中的过期工作流
+            cutoff_time = datetime.now() - timedelta(hours=max_age_hours)
+            expired_sessions = []
+            
+            for session_id, workflow in self._workflows.items():
+                if workflow.updated_at < cutoff_time:
+                    expired_sessions.append(session_id)
+            
+            for session_id in expired_sessions:
+                del self._workflows[session_id]
+                cleaned_count += 1
+            
+            # 清理持久化存储中的过期工作流
+            if self.storage:
+                storage_cleaned = await self.storage.cleanup_old_sessions(max_age_hours // 24)
+                cleaned_count += storage_cleaned
+            
+            if cleaned_count > 0:
+                logger.info(f"清理了 {cleaned_count} 个过期工作流", max_age_hours=max_age_hours)
+            
+            return cleaned_count
+            
+        except Exception as e:
+            logger.error("清理过期工作流失败", error=str(e))
+            return 0
+    
+    async def backup_all_workflows(self) -> bool:
+        """备份所有工作流状态"""
+        try:
+            if not self.storage:
+                return False
+            
+            backup_count = await self.storage.backup_all_sessions()
+            logger.info(f"备份了 {backup_count} 个工作流状态")
+            return True
+            
+        except Exception as e:
+            logger.error("备份工作流状态失败", error=str(e))
+            return False
+    
+    def set_storage(self, storage):
+        """设置持久化存储"""
+        self.storage = storage
+        logger.info("工作流管理器存储已配置", 
+                   storage_type=storage.__class__.__name__)
 
 
 # 全局工作流管理器实例
@@ -540,4 +679,12 @@ global_workflow_manager = WorkflowManager()
 
 def get_workflow_manager() -> WorkflowManager:
     """获取全局工作流管理器"""
+    return global_workflow_manager
+
+
+def setup_workflow_manager(storage=None) -> WorkflowManager:
+    """设置工作流管理器"""
+    global global_workflow_manager
+    if storage:
+        global_workflow_manager.set_storage(storage)
     return global_workflow_manager

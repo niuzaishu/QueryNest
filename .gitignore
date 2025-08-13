@@ -262,6 +262,7 @@ test_results/
 # 文档生成
 docs/_build/
 docs/build/
+docs/
 
 # 本地开发环境
 .local/

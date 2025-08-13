@@ -1,0 +1,12 @@
+{
+  "id": "example_plugin",
+  "name": "示例插件",
+  "version": "0.1.0",
+  "description": "QueryNest插件系统的示例插件",
+  "author": "QueryNest团队",
+  "main": "main.py",
+  "dependencies": {},
+  "tools": [
+    "example_tool"
+  ]
+}
