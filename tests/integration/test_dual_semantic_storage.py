@@ -13,7 +13,7 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from mcp_tools.semantic_management import SemanticManagementTool
+from mcp_tools.unified_semantic_tool import UnifiedSemanticTool
 from mcp_tools.collection_analysis import CollectionAnalysisTool
 
 
@@ -55,7 +55,7 @@ class TestDualSemanticStorage(BaseIntegrationTest):
         
         try:
             # 创建语义管理工具
-            semantic_tool = SemanticManagementTool(
+            semantic_tool = UnifiedSemanticTool(
                 connection_manager=self.connection_manager,
                 metadata_manager=self.metadata_manager,
                 semantic_analyzer=self.semantic_analyzer
@@ -105,7 +105,7 @@ class TestDualSemanticStorage(BaseIntegrationTest):
         
         try:
             # 先存储一些语义信息到业务库
-            semantic_tool = SemanticManagementTool(
+            semantic_tool = UnifiedSemanticTool(
                 connection_manager=self.connection_manager,
                 metadata_manager=self.metadata_manager, 
                 semantic_analyzer=self.semantic_analyzer
@@ -176,7 +176,7 @@ class TestDualSemanticStorage(BaseIntegrationTest):
             })
             
             # 执行批量语义分析
-            semantic_tool = SemanticManagementTool(
+            semantic_tool = UnifiedSemanticTool(
                 connection_manager=self.connection_manager,
                 metadata_manager=self.metadata_manager,
                 semantic_analyzer=self.semantic_analyzer
@@ -216,7 +216,7 @@ class TestDualSemanticStorage(BaseIntegrationTest):
         
         try:
             # 存储语义信息（会存储到业务库）
-            semantic_tool = SemanticManagementTool(
+            semantic_tool = UnifiedSemanticTool(
                 connection_manager=self.connection_manager,
                 metadata_manager=self.metadata_manager,
                 semantic_analyzer=self.semantic_analyzer
@@ -302,7 +302,7 @@ class TestDualSemanticStorage(BaseIntegrationTest):
         
         try:
             # 在不同的集合中存储类似的语义信息
-            semantic_tool = SemanticManagementTool(
+            semantic_tool = UnifiedSemanticTool(
                 connection_manager=self.connection_manager,
                 metadata_manager=self.metadata_manager,
                 semantic_analyzer=self.semantic_analyzer

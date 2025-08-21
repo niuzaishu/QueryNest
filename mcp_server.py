@@ -17,7 +17,7 @@ from mcp.types import (
 
 from config import QueryNestConfig
 from database.connection_manager import ConnectionManager
-from database.metadata_manager import MetadataManager
+from database.metadata_manager_file import FileBasedMetadataManager
 from database.query_engine import QueryEngine
 from scanner.structure_scanner import StructureScanner
 from scanner.semantic_analyzer import SemanticAnalyzer
@@ -79,12 +79,12 @@ class QueryNestMCPServer:
                 logger.warning("无法读取配置文件，使用默认日志配置")
                 return
             
+            # 使用新的配置结构
             logging_config = config_data.get('logging', {})
-            output_config = logging_config.get('output', {})
-            file_config = output_config.get('file', {})
+            file_config = logging_config.get('file', {})
             
             # 检查是否启用文件日志
-            if not file_config.get('enabled', False):
+            if not file_config.get('enabled', True):
                 logger.info("文件日志未启用")
                 return
             
@@ -201,10 +201,10 @@ class QueryNestMCPServer:
             await self.connection_manager.initialize()
             logger.info("Connection manager initialized successfully")
             
-            # 初始化元数据管理器
-            self.metadata_manager = MetadataManager(self.connection_manager)
+            # 初始化元数据管理器（基于文件存储）
+            self.metadata_manager = FileBasedMetadataManager(self.connection_manager)
             await self.metadata_manager.initialize()
-            logger.info("Metadata manager initialized successfully")
+            logger.info("File-based metadata manager initialized successfully")
             
             # 初始化查询引擎
             self.query_engine = QueryEngine(self.connection_manager, self.metadata_manager, self.config)

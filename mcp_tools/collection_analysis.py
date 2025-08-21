@@ -103,67 +103,67 @@ class CollectionAnalysisTool:
             )]
         
         # 验证集合是否存在
-            collection_exists = await self._check_collection_exists(instance_id, database_name, collection_name)
-            if not collection_exists:
+        collection_exists = await self._check_collection_exists(instance_id, database_name, collection_name)
+        if not collection_exists:
+            return [TextContent(
+                type="text",
+                text=f"集合 '{database_name}.{collection_name}' 不存在。"
+            )]
+        
+        # 如果需要重新扫描或集合信息不存在，进行扫描
+        if rescan or not await self._has_collection_metadata(instance_id, database_name, collection_name):
+            await self._scan_collection(instance_id, database_name, collection_name)
+        
+        # 获取集合基本信息
+        from bson import ObjectId
+        if isinstance(instance_id, str):
+            # 如果是字符串，需要先获取实例信息来得到ObjectId
+            instance_info = await self.metadata_manager.get_instance_by_name(instance_id, instance_id)
+            if not instance_info:
                 return [TextContent(
                     type="text",
-                    text=f"集合 '{database_name}.{collection_name}' 不存在。"
+                    text=f"无法找到实例 '{instance_id}'。"
                 )]
-            
-            # 如果需要重新扫描或集合信息不存在，进行扫描
-            if rescan or not await self._has_collection_metadata(instance_id, database_name, collection_name):
-                await self._scan_collection(instance_id, database_name, collection_name)
-            
-            # 获取集合基本信息
-            from bson import ObjectId
-            if isinstance(instance_id, str):
-                # 如果是字符串，需要先获取实例信息来得到ObjectId
-                instance_info = await self.metadata_manager.get_instance_by_name(instance_id, instance_id)
-                if not instance_info:
-                    return [TextContent(
-                        type="text",
-                        text=f"无法找到实例 '{instance_id}'。"
-                    )]
-                instance_obj_id = instance_info["_id"]
-            else:
-                instance_obj_id = instance_id
-            
-            collections = await self.metadata_manager.get_collections_by_database(
-                instance_id, instance_obj_id, database_name
-            )
-            # 查找指定的集合
-            collection_info = None
-            for collection in collections:
-                if collection.get("collection_name") == collection_name:
-                    collection_info = collection
-                    break
-            
-            if not collection_info:
-                return [TextContent(
-                    type="text",
-                    text=f"无法获取集合 '{database_name}.{collection_name}' 的信息。请尝试重新扫描。"
-                )]
-            
-            # 获取字段信息
-            fields = await self.metadata_manager.get_fields_by_collection(
-                instance_id, instance_id, database_name, collection_name
-            )
-            
-            # 构建分析结果
-            result_text = await self._build_analysis_result(
-                collection_info, fields, instance_id, database_name, collection_name,
-                include_semantics, include_examples, include_indexes
-            )
-            
-            logger.info(
-                "集合分析完成",
-                instance_id=instance_id,
-                database=database_name,
-                collection=collection_name,
-                field_count=len(fields)
-            )
-            
-            return [TextContent(type="text", text=result_text)]
+            instance_obj_id = instance_info["_id"]
+        else:
+            instance_obj_id = instance_id
+        
+        collections = await self.metadata_manager.get_collections_by_database(
+            instance_id, instance_obj_id, database_name
+        )
+        # 查找指定的集合
+        collection_info = None
+        for collection in collections:
+            if collection.get("collection_name") == collection_name:
+                collection_info = collection
+                break
+        
+        if not collection_info:
+            return [TextContent(
+                type="text",
+                text=f"无法获取集合 '{database_name}.{collection_name}' 的信息。请尝试重新扫描。"
+            )]
+        
+        # 获取字段信息
+        fields = await self.metadata_manager.get_fields_by_collection(
+            instance_id, instance_id, database_name, collection_name
+        )
+        
+        # 构建分析结果
+        result_text = await self._build_analysis_result(
+            collection_info, fields, instance_id, database_name, collection_name,
+            include_semantics, include_examples, include_indexes
+        )
+        
+        logger.info(
+            "集合分析完成",
+            instance_id=instance_id,
+            database=database_name,
+            collection=collection_name,
+            field_count=len(fields)
+        )
+        
+        return [TextContent(type="text", text=result_text)]
     
     @with_retry(RetryConfig(max_attempts=3, base_delay=1.0))
     @with_error_handling("检查集合存在性失败")

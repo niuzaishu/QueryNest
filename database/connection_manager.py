@@ -218,32 +218,20 @@ class ConnectionManager:
         return True
     
     async def init_instance_metadata_on_demand(self, instance_name: str) -> bool:
-        """按需为指定实例初始化元数据库（用户确认实例后调用）"""
+        """按需初始化实例元数据（基于文件存储）"""
         connection = self.get_instance_connection(instance_name)
         if connection is None:
             logger.error("实例连接不存在", instance=instance_name)
             return False
         
         try:
-            metadata_db = connection.get_database(self.config.metadata.database)
-            if metadata_db is None:
-                return False
-            
-            # 测试元数据库访问
-            await metadata_db.command('ping')
-            
-            # 创建基础集合（如果不存在）
-            collections = ['instances', 'databases', 'collections', 'fields', 'query_history', 'semantic_learning']
-            existing_collections = await metadata_db.list_collection_names()
-            for collection_name in collections:
-                if collection_name not in existing_collections:
-                    await metadata_db.create_collection(collection_name)
-            
-            logger.info("实例元数据库按需初始化成功", instance=instance_name)
+            # 基于文件存储，元数据初始化由FileMetadataManager处理
+            # 这里只需要确认实例连接正常即可
+            logger.info("实例元数据初始化成功（使用文件存储）", instance=instance_name)
             return True
             
         except Exception as e:
-            logger.error("实例元数据库按需初始化失败", 
+            logger.error("实例元数据初始化失败", 
                         instance=instance_name, error=str(e))
             return False
     
@@ -273,6 +261,17 @@ class ConnectionManager:
         """获取实例连接"""
         return self.connections.get(instance_name)
     
+    def get_client(self, instance_name: str) -> Optional[AsyncIOMotorClient]:
+        """获取MongoDB客户端
+        
+        此方法作为兼容层，直接返回实例连接的client属性。
+        用于与期望直接获取client的代码兼容。
+        """
+        connection = self.get_instance_connection(instance_name)
+        if connection:
+            return connection.client
+        return None
+    
     def get_instance_database(self, instance_name: str, db_name: str) -> Optional[AsyncIOMotorDatabase]:
         """获取实例数据库连接"""
         connection = self.get_instance_connection(instance_name)
@@ -280,12 +279,13 @@ class ConnectionManager:
             return connection.get_database(db_name)
         return None
     
-    def get_metadata_database(self, instance_name: str) -> Optional[AsyncIOMotorDatabase]:
-        """获取指定实例的元数据库连接"""
+    def get_metadata_database(self, instance_name: str) -> Optional[str]:
+        """获取指定实例的元数据存储路径（文件存储）"""
+        # 返回实例名称，用于文件存储路径生成
         connection = self.get_instance_connection(instance_name)
         if connection is None:
             return None
-        return connection.get_database(self.config.metadata.database)
+        return instance_name
     
     def get_available_instances(self) -> List[str]:
         """获取可用实例列表"""
@@ -357,13 +357,15 @@ class ConnectionManager:
                 # 元数据库连接已随各实例连接一起管理，无需单独检查
                 
                 # 等待下次检查
-                await asyncio.sleep(60)  # 每分钟检查一次
+                health_check_interval = self.config.connection_pool.health_check_interval
+                await asyncio.sleep(health_check_interval)
                 
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error("健康检查循环异常", error=str(e))
-                await asyncio.sleep(60)
+                health_check_interval = self.config.connection_pool.health_check_interval
+                await asyncio.sleep(health_check_interval)
     
     async def validate_query_permissions(self, instance_name: str, operation: str) -> bool:
         """验证查询权限"""

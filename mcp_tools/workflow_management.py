@@ -62,9 +62,9 @@ class WorkflowStatusTool:
         session_id = arguments.get("session_id", "default")
         
         # 获取或创建工作流
-        workflow = self.workflow_manager.get_or_create_workflow(session_id)
-        stage_info = self.workflow_manager.get_current_stage_info(session_id)
-        summary = self.workflow_manager.get_workflow_summary(session_id)
+        workflow = await self.workflow_manager.get_or_create_workflow(session_id)
+        stage_info = await self.workflow_manager.get_current_stage_info(session_id)
+        summary = await self.workflow_manager.get_workflow_summary(session_id)
         
         # 构建详细的状态报告
         response_text = self._build_status_response(stage_info, summary)
@@ -296,7 +296,7 @@ class WorkflowResetTool:
             )]
         
         # 执行重置
-        success = self.workflow_manager.reset_workflow(session_id)
+        success = await self.workflow_manager.reset_workflow(session_id)
         
         if success:
             response_text = (

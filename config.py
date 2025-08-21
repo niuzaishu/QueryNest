@@ -35,15 +35,11 @@ class MongoInstanceConfig(BaseModel):
         return v
 
 
-class MetadataConfig(BaseModel):
-    """元数据库配置"""
-    database_name: str = Field(default="querynest_metadata", description="元数据库名称")
-    collections: Optional[Dict[str, str]] = Field(default=None, description="集合名称配置")
-    
-    @property
-    def database(self) -> str:
-        """为向后兼容提供database属性"""
-        return self.database_name
+class StorageConfig(BaseModel):
+    """存储配置"""
+    metadata_path: str = Field(default="data/metadata", description="元数据存储路径")
+    semantic_path: str = Field(default="data/semantics", description="语义数据存储路径")
+    retention: Optional[Dict[str, int]] = Field(default=None, description="数据保留策略")
     
 
 class SecurityConfig(BaseModel):
@@ -77,41 +73,52 @@ class ScannerConfig(BaseModel):
 
 class MCPConfig(BaseModel):
     """MCP服务配置"""
-    name: str = Field(default="querynest", description="MCP服务名称")
-    version: str = Field(default="0.1.0", description="服务版本")
+    name: str = Field(default="QueryNest", description="MCP服务名称")
+    version: str = Field(default="1.0.0", description="服务版本")
     description: str = Field(
-        default="QueryNest MCP MongoDB查询服务",
+        default="MongoDB多实例查询服务",
         description="服务描述"
     )
-    transport: str = Field(default="stdio", description="传输方式")
-    host: Optional[str] = Field(default=None, description="HTTP服务主机")
-    port: Optional[int] = Field(default=None, description="HTTP服务端口")
+
+
+class LoggingFileConfig(BaseModel):
+    """日志文件配置"""
+    enabled: bool = Field(default=True, description="是否启用文件日志")
+    path: str = Field(default="logs/querynest.log", description="日志文件路径")
+    max_size: str = Field(default="100MB", description="日志文件最大大小")
+    backup_count: int = Field(default=5, description="日志文件备份数量")
 
 
 class LoggingConfig(BaseModel):
     """日志配置"""
     level: str = Field(default="INFO", description="日志级别")
-    format: str = Field(
-        default="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        description="日志格式"
-    )
-    file_path: Optional[str] = Field(default=None, description="日志文件路径")
-    max_size: int = Field(default=10485760, description="日志文件最大大小（字节）")
-    backup_count: int = Field(default=5, description="日志文件备份数量")
+    format: str = Field(default="json", description="日志格式")
+    file: LoggingFileConfig = Field(default_factory=LoggingFileConfig, description="文件日志配置")
+
+
+class ConnectionPoolConfig(BaseModel):
+    """连接池配置"""
+    health_check_interval: int = Field(default=30, description="健康检查间隔（秒）")
+    max_retries: int = Field(default=3, description="连接重试次数")
+    retry_interval: int = Field(default=5, description="重试间隔（秒）")
+
+
+class ToolsConfig(BaseModel):
+    """工具配置"""
+    max_retries: int = Field(default=3, description="最大重试次数")
+    retry_delay: float = Field(default=1.0, description="重试延迟（秒）")
+    backoff_factor: float = Field(default=2.0, description="退避因子")
 
 
 class QueryNestConfig(BaseSettings):
     """QueryNest主配置"""
     mongo_instances: Dict[str, MongoInstanceConfig] = Field(default={}, description="MongoDB实例字典")
-    metadata: MetadataConfig = Field(default_factory=MetadataConfig, description="元数据配置")
+    storage: StorageConfig = Field(default_factory=StorageConfig, description="存储配置")
     security: SecurityConfig = Field(default_factory=SecurityConfig, description="安全配置")
     mcp: MCPConfig = Field(default_factory=MCPConfig, description="MCP服务配置")
-    cache: Optional[Dict[str, Any]] = Field(default=None, description="缓存配置")
-    connection_pool: Optional[Dict[str, Any]] = Field(default=None, description="连接池配置")
-    logging: Optional[Dict[str, Any]] = Field(default=None, description="日志配置")
-    monitoring: Optional[Dict[str, Any]] = Field(default=None, description="监控配置")
-    performance: Optional[Dict[str, Any]] = Field(default=None, description="性能配置")
-    development: Optional[Dict[str, Any]] = Field(default=None, description="开发配置")
+    logging: LoggingConfig = Field(default_factory=LoggingConfig, description="日志配置")
+    connection_pool: ConnectionPoolConfig = Field(default_factory=ConnectionPoolConfig, description="连接池配置")
+    tools: ToolsConfig = Field(default_factory=ToolsConfig, description="工具配置")
     
     model_config = ConfigDict(
         env_prefix="QUERYNEST_",

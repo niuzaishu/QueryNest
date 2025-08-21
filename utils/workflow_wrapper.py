@@ -26,7 +26,7 @@ class WorkflowConstrainedTool:
     async def execute(self, arguments: Dict[str, Any], session_id: str = "default") -> List[TextContent]:
         """执行工具（添加工作流约束）"""
         # 验证工具调用是否符合当前工作流
-        can_call, message, stage_info = self.workflow_manager.validate_tool_call(session_id, self.tool_name)
+        can_call, message, stage_info = await self.workflow_manager.validate_tool_call(session_id, self.tool_name)
         
         if not can_call:
             return self._create_workflow_constraint_response(message, stage_info)
@@ -127,7 +127,7 @@ class WorkflowConstrainedTool:
     async def _enhance_arguments_with_context(self, arguments: Dict[str, Any], session_id: str) -> Dict[str, Any]:
         """使用工作流上下文增强参数"""
         enhanced = arguments.copy()
-        workflow_data = self.workflow_manager.get_workflow_data(session_id)
+        workflow_data = await self.workflow_manager.get_workflow_data(session_id)
         
         # 从工作流上下文推断缺失参数
         if 'instance_id' not in enhanced or not enhanced['instance_id']:
@@ -225,8 +225,8 @@ class WorkflowConstrainedTool:
     
     async def _handle_workflow_status(self, session_id: str) -> List[TextContent]:
         """处理工作流状态查询"""
-        stage_info = self.workflow_manager.get_current_stage_info(session_id)
-        workflow_data = self.workflow_manager.get_workflow_summary(session_id)
+        stage_info = await self.workflow_manager.get_current_stage_info(session_id)
+        workflow_data = await self.workflow_manager.get_workflow_summary(session_id)
         
         response_text = "## 📊 工作流状态\n\n"
         
@@ -278,7 +278,7 @@ class WorkflowConstrainedTool:
     
     async def _handle_workflow_reset(self, session_id: str) -> List[TextContent]:
         """处理工作流重置"""
-        self.workflow_manager.reset_workflow(session_id)
+        await self.workflow_manager.reset_workflow(session_id)
         
         response_text = "## 🔄 工作流已重置\n\n"
         response_text += "所有工作流数据已清除，您可以重新开始。\n\n"
@@ -290,10 +290,10 @@ class WorkflowConstrainedTool:
     
     async def _handle_workflow_next(self, session_id: str) -> List[TextContent]:
         """处理工作流前进"""
-        success = self.workflow_manager.advance_stage(session_id)
+        success = await self.workflow_manager.advance_stage(session_id)
         
         if success:
-            stage_info = self.workflow_manager.get_current_stage_info(session_id)
+            stage_info = await self.workflow_manager.get_current_stage_info(session_id)
             response_text = f"## ⏭️ 工作流已前进\n\n"
             response_text += f"当前阶段: **{stage_info.get('stage_name')}**\n"
             response_text += f"{stage_info.get('description')}\n"
@@ -305,10 +305,10 @@ class WorkflowConstrainedTool:
     
     async def _handle_workflow_back(self, session_id: str) -> List[TextContent]:
         """处理工作流后退"""
-        success = self.workflow_manager.go_back_stage(session_id)
+        success = await self.workflow_manager.go_back_stage(session_id)
         
         if success:
-            stage_info = self.workflow_manager.get_current_stage_info(session_id)
+            stage_info = await self.workflow_manager.get_current_stage_info(session_id)
             response_text = f"## ⏮️ 工作流已后退\n\n"
             response_text += f"当前阶段: **{stage_info.get('stage_name')}**\n"
             response_text += f"{stage_info.get('description')}\n"
@@ -335,31 +335,31 @@ class WorkflowConstrainedTool:
             updates['collection_name'] = arguments['collection_name']
         
         if updates:
-            self.workflow_manager.update_workflow_data(session_id, updates)
+            await self.workflow_manager.update_workflow_data(session_id, updates)
         
         # 根据工具类型自动推进工作流
         if self.tool_name == 'discover_instances':
             # 发现实例后，推进到实例发现阶段
-            self.workflow_manager.try_advance_to_stage(session_id, WorkflowStage.INSTANCE_DISCOVERY)
+            await self.workflow_manager.try_advance_to_stage(session_id, WorkflowStage.INSTANCE_DISCOVERY)
         
         elif self.tool_name == 'discover_databases':
             # 发现数据库后，可以进入集合分析阶段
-            self.workflow_manager.try_advance_to_stage(session_id, WorkflowStage.COLLECTION_ANALYSIS)
+            await self.workflow_manager.try_advance_to_stage(session_id, WorkflowStage.COLLECTION_ANALYSIS)
         
         elif self.tool_name == 'analyze_collection':
             # 分析集合后，可以进入查询生成阶段
-            self.workflow_manager.try_advance_to_stage(session_id, WorkflowStage.QUERY_GENERATION)
+            await self.workflow_manager.try_advance_to_stage(session_id, WorkflowStage.QUERY_GENERATION)
         
         elif self.tool_name == 'generate_query':
             # 生成查询后，可以进入查询确认阶段
-            self.workflow_manager.try_advance_to_stage(session_id, WorkflowStage.QUERY_CONFIRMATION)
+            await self.workflow_manager.try_advance_to_stage(session_id, WorkflowStage.QUERY_CONFIRMATION)
     
     async def _enhance_result_with_workflow_guidance(self, 
                                                    original_result: List[TextContent], 
                                                    session_id: str) -> List[TextContent]:
         """在结果中添加工作流指导信息"""
         # 获取当前阶段的下一步建议
-        stage_info = self.workflow_manager.get_current_stage_info(session_id)
+        stage_info = await self.workflow_manager.get_current_stage_info(session_id)
         suggestions = stage_info.get('next_suggestions', [])
         
         # 只在有明确下一步建议时添加指导信息

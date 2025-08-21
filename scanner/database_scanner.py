@@ -13,7 +13,7 @@ from bson import ObjectId
 from pymongo.errors import PyMongoError
 
 from database.connection_manager import ConnectionManager
-from database.metadata_manager import MetadataManager
+from database.metadata_manager_file import FileBasedMetadataManager
 from config import ScannerConfig
 
 logger = logging.getLogger(__name__)
@@ -26,7 +26,7 @@ class DatabaseScanner:
     """
     
     def __init__(self, connection_manager: ConnectionManager, 
-                 metadata_manager: MetadataManager, 
+                 metadata_manager: FileBasedMetadataManager, 
                  config: ScannerConfig):
         """
         初始化数据库扫描器

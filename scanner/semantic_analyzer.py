@@ -8,7 +8,7 @@ import structlog
 import asyncio
 from bson import ObjectId
 
-from database.metadata_manager import MetadataManager
+from database.metadata_manager_file import FileBasedMetadataManager
 from database.connection_manager import ConnectionManager
 from storage.local_semantic_storage import LocalSemanticStorage
 from storage.semantic_file_manager import SemanticFileManager
@@ -21,7 +21,7 @@ logger = structlog.get_logger(__name__)
 class SemanticAnalyzer:
     """语义分析器"""
     
-    def __init__(self, metadata_manager: MetadataManager, connection_manager: ConnectionManager):
+    def __init__(self, metadata_manager: FileBasedMetadataManager, connection_manager: ConnectionManager):
         self.metadata_manager = metadata_manager
         self.connection_manager = connection_manager
         

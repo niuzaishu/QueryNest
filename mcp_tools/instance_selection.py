@@ -119,7 +119,7 @@ class InstanceSelectionTool:
             }
             
             # 尝试推进工作流到INSTANCE_SELECTION阶段
-            success, message = self.workflow_manager.transition_to(
+            success, message = await self.workflow_manager.transition_to(
                 session_id, 
                 WorkflowStage.INSTANCE_SELECTION, 
                 update_data

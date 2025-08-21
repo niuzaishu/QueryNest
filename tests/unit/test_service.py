@@ -14,7 +14,7 @@ sys.path.insert(0, str(project_root))
 
 from config import QueryNestConfig
 from database.connection_manager import ConnectionManager
-from database.metadata_manager import MetadataManager
+from database.metadata_manager_file import FileBasedMetadataManager
 from database.query_engine import QueryEngine
 from scanner.structure_scanner import StructureScanner
 from scanner.semantic_analyzer import SemanticAnalyzer
@@ -22,7 +22,7 @@ from mcp_tools import (
     InstanceDiscoveryTool,
     DatabaseDiscoveryTool,
     CollectionAnalysisTool,
-    SemanticManagementTool,
+    UnifiedSemanticTool,
     QueryGenerationTool,
     QueryConfirmationTool,
 )
@@ -56,7 +56,7 @@ class QueryNestTester:
             print("✅ 连接管理器初始化完成")
             
             # 初始化元数据管理器
-            self.metadata_manager = MetadataManager(self.connection_manager)
+            self.metadata_manager = FileBasedMetadataManager(self.connection_manager)
             await self.metadata_manager.initialize()
             print("✅ 元数据管理器初始化完成")
             
@@ -96,7 +96,7 @@ class QueryNestTester:
         )
         
         # 语义管理工具
-        self.tools["manage_semantics"] = SemanticManagementTool(
+        self.tools["manage_semantics"] = UnifiedSemanticTool(
             self.connection_manager, self.metadata_manager, self.semantic_analyzer
         )
         

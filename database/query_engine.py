@@ -11,7 +11,7 @@ import re
 from bson import ObjectId
 
 from database.connection_manager import ConnectionManager
-from database.metadata_manager import MetadataManager
+from database.metadata_manager_file import FileBasedMetadataManager
 from config import QueryNestConfig
 
 
@@ -93,7 +93,7 @@ class QueryEngine:
     """查询引擎"""
     
     def __init__(self, connection_manager: ConnectionManager, 
-                 metadata_manager: MetadataManager, config: QueryNestConfig):
+                 metadata_manager: FileBasedMetadataManager, config: QueryNestConfig):
         self.connection_manager = connection_manager
         self.metadata_manager = metadata_manager
         self.config = config

@@ -1,129 +1,87 @@
-# QueryNest MCP MongoDB查询服务配置文件示例
-# 复制此文件为 config.yaml 并根据实际环境修改配置
+# QueryNest MongoDB查询服务配置文件示例
+# 复制此文件为 config.yaml 并根据需要修改配置
 
 # MongoDB实例配置
 mongodb:
   instances:
-    # 生产环境主库
-    production_main:
-      name: "生产主库"
+    # 生产环境实例示例
+    production:
+      name: "生产环境"
       environment: "production"
-      connection_string: "mongodb://querynest_readonly:${PROD_MONGODB_PASSWORD}@prod-mongodb.example.com:27017/admin?ssl=true"
-      database: "main_db"
-      description: "生产环境主MongoDB实例，包含核心业务数据"
+      connection_string: "mongodb://username:password@prod-server:27017/database?authSource=admin"
+      description: "生产环境MongoDB实例"
       status: "active"
-      tags: ["production", "main", "core"]
       
-    # 测试环境实例
-    testing_env:
+    # 测试环境实例示例
+    staging:
       name: "测试环境"
-      environment: "testing"
-      connection_string: "mongodb://test_user:${TEST_MONGODB_PASSWORD}@test-mongodb.example.com:27017/admin"
-      database: "test_db"
-      description: "功能测试环境MongoDB实例"
+      environment: "staging"
+      connection_string: "mongodb://username:password@staging-server:27017/database?authSource=admin"
+      description: "测试环境MongoDB实例"
       status: "active"
-      tags: ["test", "development"]
-    
-    # 本地开发环境（示例）
-    local_dev:
+      
+    # 本地开发实例示例
+    local:
       name: "本地开发环境"
       environment: "dev"
       connection_string: "mongodb://localhost:27017/querynest_dev"
-      database: "querynest_dev"
       description: "本地开发MongoDB实例"
       status: "active"
-      tags: ["dev", "local"]
 
-# 元数据库配置
-metadata:
-  # 元数据数据库名称（每个实例都会创建独立的元数据库）
-  database_name: "querynest_metadata"
-  # 集合名称配置
-  collections:
-    instances: "instances"
-    databases: "databases" 
-    collections: "collections"
-    fields: "fields"
-    query_history: "query_history"
-  # 数据保留策略
-  retention:
-    query_history_days: 30
-    scan_history_days: 90
+# 文件存储配置
+storage:
+  # 元数据存储路径（相对路径或绝对路径）
+  metadata_path: "data/metadata"
+  # 语义数据存储路径
+  semantic_path: "data/semantics"
 
-# 安全配置
+# 查询安全限制
 security:
-  # 查询权限控制
-  permissions:
-    # 允许的查询操作
-    allowed_operations:
-      - "find"
-      - "count"
-      - "aggregate"
-      - "distinct"
-    # 禁止的查询操作
-    forbidden_operations:
-      - "insert"
-      - "update"
-      - "delete"
-      - "drop"
-      - "create"
-  
-  
-  # 查询限制
-  limits:
-    # 最大返回文档数
-    max_documents: 1000
-    # 查询超时时间（秒）
-    query_timeout: 30
-
-  
-  # 数据脱敏配置
-  data_masking:
-    # 是否启用数据脱敏
-    enabled: true
-    # 需要脱敏的字段模式
-    sensitive_field_patterns:
-      - "password"
-      - "secret"
-      - "token"
-      - "key"
-      - "phone"
-      - "email"
-      - "id_card"
-      - "credit_card"
+  # 单次查询最大返回文档数
+  max_result_size: 1000
+  # 查询超时时间（秒）
+  query_timeout: 30
 
 # MCP服务配置
 mcp:
-  # 服务器信息
-  server:
-    name: "QueryNest"
-    version: "1.0.0"
-    description: "MongoDB多实例查询服务"
-  
+  name: "QueryNest"
+  version: "1.0.0"
+  description: "MongoDB多实例查询服务"
 
 # 日志配置
 logging:
-  # 日志级别
+  # 日志级别: DEBUG, INFO, WARNING, ERROR, CRITICAL
   level: "INFO"
-  # 日志格式
-  format: "json"  # json 或 text
-  # 日志输出
-  output:
-    # 文件输出
-    file:
-      enabled: false
-      path: "logs/querynest.log"
-      level: "DEBUG"
-      max_size: "100MB"
-      backup_count: 5
+  # 日志格式: json 或 text
+  format: "json"
+  # 文件日志配置
+  file:
+    enabled: true
+    path: "logs/querynest.log"
+    max_size: "100MB"
+    backup_count: 5
 
-# 性能配置
-performance:
-  # 连接池配置
-  connection_pool:
-    # 健康检查间隔（秒）
-    health_check_interval: 30
-    # 连接重试次数
-    max_retries: 3
-    # 重试间隔（秒）
-    retry_interval: 5
+# 连接池配置
+connection_pool:
+  # 健康检查间隔（秒）
+  health_check_interval: 30
+  # 最大重试次数
+  max_retries: 3
+  # 重试间隔（秒）
+  retry_interval: 5
+
+# 工具配置
+tools:
+  # 工具执行最大重试次数
+  max_retries: 3
+  # 重试延迟（秒）
+  retry_delay: 1.0
+  # 退避因子（每次重试延迟乘以此因子）
+  backoff_factor: 2.0
+
+# 环境变量支持
+# 所有配置项都可以通过环境变量覆盖，格式为: QUERYNEST_<配置路径>
+# 例如:
+# QUERYNEST_LOGGING_LEVEL=DEBUG
+# QUERYNEST_SECURITY_MAX_RESULT_SIZE=500
+# QUERYNEST_MONGODB_INSTANCES_LOCAL_STATUS=inactive

@@ -16,7 +16,7 @@ sys.path.insert(0, str(project_root))
 from mcp_tools.instance_discovery import InstanceDiscoveryTool
 from mcp_tools.database_discovery import DatabaseDiscoveryTool
 from mcp_tools.collection_analysis import CollectionAnalysisTool
-from mcp_tools.semantic_management import SemanticManagementTool
+from mcp_tools.unified_semantic_tool import UnifiedSemanticTool
 from mcp_tools.query_generation import QueryGenerationTool
 from mcp_tools.query_confirmation import QueryConfirmationTool
 
@@ -114,7 +114,7 @@ class TestEndToEndWorkflow(BaseIntegrationTest):
             print(f"✓ 步骤3完成 - 分析集合结构")
             
             # === 步骤4: 语义分析和管理 ===
-            semantic_tool = SemanticManagementTool(
+            semantic_tool = UnifiedSemanticTool(
                 connection_manager=self.connection_manager,
                 metadata_manager=self.metadata_manager,
                 semantic_analyzer=self.semantic_analyzer
@@ -215,7 +215,7 @@ class TestEndToEndWorkflow(BaseIntegrationTest):
                 print(f"✓ 分析完成: {collection_name}")
             
             # === 步骤2: 建立语义关系 ===
-            semantic_tool = SemanticManagementTool(
+            semantic_tool = UnifiedSemanticTool(
                 connection_manager=self.connection_manager,
                 metadata_manager=self.metadata_manager,
                 semantic_analyzer=self.semantic_analyzer
@@ -346,7 +346,7 @@ class TestEndToEndWorkflow(BaseIntegrationTest):
                 print(f"⚠️  查询工具异常处理: {e}")
             
             # === 测试4: 语义管理容错 ===
-            semantic_tool = SemanticManagementTool(
+            semantic_tool = UnifiedSemanticTool(
                 connection_manager=self.connection_manager,
                 metadata_manager=self.metadata_manager,
                 semantic_analyzer=self.semantic_analyzer

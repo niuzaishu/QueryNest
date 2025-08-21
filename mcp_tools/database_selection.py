@@ -148,7 +148,11 @@ class DatabaseSelectionTool:
     async def _get_databases(self, instance_id: str, filter_system: bool = True) -> List[Dict[str, Any]]:
         """获取数据库列表"""
         try:
-            client = await self.connection_manager.get_client(instance_id)
+            connection = self.connection_manager.get_instance_connection(instance_id)
+            if not connection or not connection.client:
+                raise ValueError(f"实例 {instance_id} 连接不可用")
+            
+            client = connection.client
             db_names = await client.list_database_names()
             
             # 过滤系统数据库
@@ -233,7 +237,7 @@ class DatabaseSelectionTool:
         selected_db = next((db for db in databases if db["database_name"] == database_name), None)
         
         # 更新工作流状态
-        success, message = self.workflow_manager.transition_to(
+        success, message = await self.workflow_manager.transition_to(
             session_id=session_id,
             target_stage=WorkflowStage.DATABASE_SELECTION,
             update_data={
