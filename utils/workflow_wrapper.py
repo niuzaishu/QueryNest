@@ -339,8 +339,8 @@ class WorkflowConstrainedTool:
         
         # 根据工具类型自动推进工作流
         if self.tool_name == 'discover_instances':
-            # 发现实例后，推进到实例发现阶段
-            await self.workflow_manager.try_advance_to_stage(session_id, WorkflowStage.INSTANCE_DISCOVERY)
+            # 发现实例后，推进到实例分析阶段
+            await self.workflow_manager.try_advance_to_stage(session_id, WorkflowStage.INSTANCE_ANALYSIS)
         
         elif self.tool_name == 'discover_databases':
             # 发现数据库后，可以进入集合分析阶段
@@ -351,8 +351,8 @@ class WorkflowConstrainedTool:
             await self.workflow_manager.try_advance_to_stage(session_id, WorkflowStage.QUERY_GENERATION)
         
         elif self.tool_name == 'generate_query':
-            # 生成查询后，可以进入查询确认阶段
-            await self.workflow_manager.try_advance_to_stage(session_id, WorkflowStage.QUERY_CONFIRMATION)
+            # 生成查询后，可以进入查询执行阶段
+            await self.workflow_manager.try_advance_to_stage(session_id, WorkflowStage.QUERY_EXECUTION)
     
     async def _enhance_result_with_workflow_guidance(self, 
                                                    original_result: List[TextContent], 

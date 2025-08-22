@@ -17,17 +17,14 @@ logger = structlog.get_logger(__name__)
 
 
 class WorkflowStage(Enum):
-    """工作流阶段枚举"""
+    """精简的工作流阶段枚举"""
     INIT = "init"                           # 初始化
-    INSTANCE_ANALYSIS = "instance_analysis" # 分析实例
+    INSTANCE_ANALYSIS = "instance_analysis" # 发现和分析实例
     INSTANCE_SELECTION = "instance_selection" # 选择实例
-    INSTANCE_DISCOVERY = "instance_discovery" # 发现实例
-    DATABASE_ANALYSIS = "database_analysis" # 分析数据库
+    DATABASE_ANALYSIS = "database_analysis" # 发现和分析数据库
     DATABASE_SELECTION = "database_selection" # 选择数据库
-    DATABASE_DISCOVERY = "database_discovery" # 发现数据库
-    COLLECTION_ANALYSIS = "collection_analysis" # 分析集合
+    COLLECTION_ANALYSIS = "collection_analysis" # 发现和分析集合
     COLLECTION_SELECTION = "collection_selection" # 选择集合
-    COLLECTION_DISCOVERY = "collection_discovery" # 发现集合
     FIELD_ANALYSIS = "field_analysis"       # 分析字段
     QUERY_GENERATION = "query_generation"   # 生成查询
     QUERY_REFINEMENT = "query_refinement"   # 查询优化

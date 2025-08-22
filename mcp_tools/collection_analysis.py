@@ -145,8 +145,17 @@ class CollectionAnalysisTool:
             )]
         
         # 获取字段信息
+        # 先获取实例信息来得到正确的instance_id
+        instance_info = await self.metadata_manager.get_instance_by_name(instance_id, instance_id)
+        if not instance_info:
+            return [TextContent(
+                type="text",
+                text=f"无法找到实例 '{instance_id}'。"
+            )]
+        actual_instance_id = instance_info["_id"]
+        
         fields = await self.metadata_manager.get_fields_by_collection(
-            instance_id, instance_id, database_name, collection_name
+            instance_id, actual_instance_id, database_name, collection_name
         )
         
         # 构建分析结果
@@ -401,8 +410,14 @@ class CollectionAnalysisTool:
     async def get_field_suggestions(self, instance_id: str, database_name: str, 
                                   collection_name: str, query_description: str) -> List[Dict[str, Any]]:
         """根据查询描述获取字段建议"""
+        # 先获取实例信息来得到正确的instance_id
+        instance_info = await self.metadata_manager.get_instance_by_name(instance_id, instance_id)
+        if not instance_info:
+            return []
+        
+        actual_instance_id = instance_info["_id"]
         fields = await self.metadata_manager.get_fields_by_collection(
-            instance_id, instance_id, database_name, collection_name
+            instance_id, actual_instance_id, database_name, collection_name
         )
         
         if not fields:

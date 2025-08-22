@@ -315,8 +315,20 @@ class SemanticAnalyzer:
         
         try:
             # 获取集合的所有字段
+            # 先获取实例信息来得到正确的instance_id
+            instance_info = await self.metadata_manager.get_instance_by_name(instance_id, instance_id)
+            if not instance_info:
+                return {
+                    "total_fields": 0,
+                    "analyzed_fields": 0,
+                    "updated_fields": 0,
+                    "analysis_results": {},
+                    "error": f"实例 '{instance_id}' 不存在"
+                }
+            
+            actual_instance_id = instance_info["_id"]
             fields = await self.metadata_manager.get_fields_by_collection(
-                instance_id, database_name, collection_name
+                instance_id, actual_instance_id, database_name, collection_name
             )
             
             analysis_results = {}

@@ -5,6 +5,7 @@ from .instance_discovery import InstanceDiscoveryTool
 from .instance_selection import InstanceSelectionTool
 from .database_selection import DatabaseSelectionTool
 from .database_discovery import DatabaseDiscoveryTool
+from .collection_selection import CollectionSelectionTool
 from .collection_analysis import CollectionAnalysisTool
 from .query_generation import QueryGenerationTool
 from .query_confirmation import QueryConfirmationTool
@@ -15,7 +16,9 @@ from .unified_semantic_tool import UnifiedSemanticTool
 __all__ = [
     "InstanceDiscoveryTool",
     "InstanceSelectionTool",
+    "DatabaseSelectionTool",
     "DatabaseDiscoveryTool",
+    "CollectionSelectionTool",
     "CollectionAnalysisTool",
     "QueryGenerationTool",
     "QueryConfirmationTool",

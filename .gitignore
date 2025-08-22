@@ -179,6 +179,7 @@ config.local.yaml
 config.production.yaml
 config.development.yaml
 config.test.yaml
+config.yaml
 *.local.yaml
 
 # 日志文件

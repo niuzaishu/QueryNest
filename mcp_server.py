@@ -26,6 +26,7 @@ from mcp_tools import (
     InstanceSelectionTool,
     DatabaseSelectionTool,
     DatabaseDiscoveryTool,
+    CollectionSelectionTool,
     CollectionAnalysisTool,
     QueryGenerationTool,
     QueryConfirmationTool,
@@ -239,6 +240,7 @@ class QueryNestMCPServer:
         instance_selection = InstanceSelectionTool(self.connection_manager, self.metadata_manager)
         database_selection = DatabaseSelectionTool(self.connection_manager, self.metadata_manager)
         database_discovery = DatabaseDiscoveryTool(self.connection_manager, self.metadata_manager)
+        collection_selection = CollectionSelectionTool(self.connection_manager, self.metadata_manager)
         collection_analysis = CollectionAnalysisTool(
             self.connection_manager, self.metadata_manager, self.semantic_analyzer
         )
@@ -270,6 +272,9 @@ class QueryNestMCPServer:
         )
         self.tools["discover_databases"] = WorkflowConstrainedTool(
             database_discovery, "discover_databases"
+        )
+        self.tools["select_collection"] = WorkflowConstrainedTool(
+            collection_selection, "select_collection"
         )
         self.tools["analyze_collection"] = WorkflowConstrainedTool(
             collection_analysis, "analyze_collection"

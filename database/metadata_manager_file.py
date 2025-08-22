@@ -328,6 +328,21 @@ class FileBasedMetadataManager:
     def _get_instance_collections(self, instance_name: str) -> Optional[Dict]:
         """兼容性方法 - 返回None表示使用文件存储"""
         return None
+        
+    async def search_fields_by_meaning(self, target_instance_name: str, search_term: str) -> List[Dict[str, Any]]:
+        """根据业务含义搜索字段，使用本地文件存储"""
+        try:
+            results = await self.local_storage.search_semantics(target_instance_name, search_term)
+            logger.info(
+                "本地文件语义搜索完成",
+                target_instance=target_instance_name,
+                search_term=search_term,
+                total_results=len(results)
+            )
+            return results
+        except Exception as e:
+            logger.error(f"语义搜索失败: {e}")
+            return []
     
     async def get_database_by_name(self, target_instance_name: str, instance_id: str, database_name: str) -> Optional[Dict[str, Any]]:
         """根据名称获取数据库信息"""

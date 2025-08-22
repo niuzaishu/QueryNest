@@ -1,32 +1,24 @@
 # -*- coding: utf-8 -*-
-"""查询生成工具"""
+"""查询生成工具 v2 - 支持用户确认机制"""
 
-from typing import Dict, List, Any, Optional, Union
-import re
-import json
-from datetime import datetime, timedelta
+from typing import Dict, List, Any, Optional
 import structlog
 from mcp.types import Tool, TextContent
 
 from database.connection_manager import ConnectionManager
 from database.metadata_manager import MetadataManager
 from scanner.semantic_analyzer import SemanticAnalyzer
-from mcp_tools.unified_semantic_tool import UnifiedSemanticTool
-from utils.parameter_validator import (
-    ParameterValidator, MCPParameterHelper, ValidationResult,
-    is_non_empty_string, is_positive_integer, is_boolean, 
-    is_valid_instance_id, is_valid_database_name, is_valid_collection_name,
-    validate_instance_exists, validate_database_exists, validate_collection_exists
-)
-from utils.tool_context import get_context_manager, ToolExecutionContext
+from utils.parameter_validator import ParameterValidator, MCPParameterHelper, ValidationResult
+from utils.tool_context import get_context_manager
 from utils.error_handler import with_error_handling, with_retry, RetryConfig
-
+from utils.workflow_manager import get_workflow_manager, WorkflowStage
+from utils.user_confirmation import UserConfirmationHelper, ConfirmationParser
 
 logger = structlog.get_logger(__name__)
 
 
 class QueryGenerationTool:
-    """查询生成工具"""
+    """查询生成工具 v2 - 支持用户确认机制"""
     
     def __init__(self, connection_manager: ConnectionManager, 
                  metadata_manager: MetadataManager,
@@ -34,1224 +26,741 @@ class QueryGenerationTool:
         self.connection_manager = connection_manager
         self.metadata_manager = metadata_manager
         self.semantic_analyzer = semantic_analyzer
-        self.unified_semantic = UnifiedSemanticTool(
-            connection_manager, metadata_manager, semantic_analyzer
-        )
         self.context_manager = get_context_manager()
-        self.validator = self._setup_validator()
-        
-        # 查询模式映射
-        self.query_patterns = {
-            # 查找模式
-            r'查找|找到|获取|搜索|查询': 'find',
-            r'统计|计数|数量|多少': 'count',
-            r'聚合|分组|汇总|统计分析': 'aggregate',
-            r'去重|唯一|不重复': 'distinct',
-            
-            # 条件模式
-            r'等于|是|为': '$eq',
-            r'不等于|不是|不为': '$ne',
-            r'大于': '$gt',
-            r'大于等于|不小于': '$gte',
-            r'小于': '$lt',
-            r'小于等于|不大于': '$lte',
-            r'包含|含有': '$regex',
-            r'在.*之间|范围': '$range',
-            r'存在|有': '$exists',
-            r'不存在|没有': '$not_exists',
-            r'为空|空值': '$null',
-            r'不为空|非空': '$not_null',
-        }
-        
-        # 时间关键词
-        self.time_keywords = {
-            r'今天|当天': 0,
-            r'昨天': -1,
-            r'前天': -2,
-            r'明天': 1,
-            r'后天': 2,
-            r'本周|这周': 'this_week',
-            r'上周|上一周': 'last_week',
-            r'本月|这个月': 'this_month',
-            r'上月|上个月': 'last_month',
-            r'今年|本年': 'this_year',
-            r'去年|上年': 'last_year',
-        }
+        self.workflow_manager = get_workflow_manager()
     
     def get_tool_definition(self) -> Tool:
         """获取工具定义"""
         return Tool(
             name="generate_query",
-            description="根据自然语言描述生成MongoDB查询语句",
+            description="智能查询生成工具：生成MongoDB查询语句并要求用户确认后执行",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "instance_id": {
                         "type": "string",
-                        "description": "MongoDB实例ID"
+                        "description": "MongoDB实例ID（可选，会从工作流上下文自动获取）"
                     },
                     "database_name": {
                         "type": "string",
-                        "description": "数据库名称"
+                        "description": "数据库名称（可选，会从工作流上下文自动获取）"
                     },
                     "collection_name": {
                         "type": "string",
-                        "description": "集合名称"
+                        "description": "集合名称（可选，会从工作流上下文自动获取）"
                     },
                     "query_description": {
                         "type": "string",
-                        "description": "查询的自然语言描述"
+                        "description": "查询需求的自然语言描述"
                     },
                     "query_type": {
                         "type": "string",
+                        "description": "查询类型",
                         "enum": ["auto", "find", "count", "aggregate", "distinct"],
-                        "description": "查询类型，auto表示自动识别",
                         "default": "auto"
                     },
                     "limit": {
                         "type": "integer",
                         "description": "结果限制数量",
-                        "default": 100,
+                        "default": 10,
                         "minimum": 1,
                         "maximum": 1000
                     },
-                    "include_explanation": {
-                        "type": "boolean",
-                        "description": "是否包含查询解释",
-                        "default": True
-                    },
-                    "output_format": {
+                    "session_id": {
                         "type": "string",
-                        "enum": ["full", "query_only", "executable"],
-                        "description": "输出格式：full=完整解释，query_only=仅查询语句，executable=可直接执行的语句",
-                        "default": "full"
+                        "description": "会话标识符，默认为'default'",
+                        "default": "default"
+                    },
+                    "user_confirmation": {
+                        "type": "string",
+                        "description": "用户对生成查询的确认选择（A=执行, B=修改, C=查看计划, D=取消）"
+                    },
+                    "skip_confirmation": {
+                        "type": "boolean",
+                        "description": "跳过用户确认，直接生成查询语句（不执行）",
+                        "default": False
                     }
                 },
-                "required": ["instance_id", "database_name", "collection_name", "query_description"]
+                "required": ["query_description"]
             }
         )
     
-    def _setup_validator(self) -> ParameterValidator:
-        """设置参数验证器"""
-        validator = ParameterValidator()
-        
-        async def get_instance_options():
-            """获取可用实例选项"""
-            try:
-                instances = await self.connection_manager.get_all_instances()
-                return [{'value': instance_id, 'display_name': instance_id, 
-                        'description': instance_config.description or '无描述'} 
-                       for instance_id, instance_config in instances.items()]
-            except Exception:
-                return []
-        
-        async def get_database_options(context):
-            """获取可用数据库选项"""
-            try:
-                if not context or not context.instance_id:
-                    return []
-                
-                connection = self.connection_manager.get_instance_connection(context.instance_id)
-                if not connection:
-                    return []
-                
-                db_names = await connection.client.list_database_names()
-                # 过滤系统数据库
-                system_dbs = {'admin', 'local', 'config'}
-                user_dbs = [name for name in db_names if name not in system_dbs]
-                
-                return [{'value': db_name, 'display_name': db_name,
-                        'description': f'数据库: {db_name}'} for db_name in user_dbs]
-            except Exception:
-                return []
-        
-        async def get_collection_options(context):
-            """获取可用集合选项"""
-            try:
-                if not context or not context.instance_id or not context.database_name:
-                    return []
-                
-                connection = self.connection_manager.get_instance_connection(context.instance_id)
-                if not connection:
-                    return []
-                
-                db = connection.client[context.database_name]
-                collection_names = await db.list_collection_names()
-                
-                return [{'value': coll_name, 'display_name': coll_name,
-                        'description': f'集合: {coll_name}'} for coll_name in collection_names]
-            except Exception:
-                return []
-        
-        # 设置验证规则
-        validator.add_required_parameter(
-            name="instance_id",
-            type_check=lambda x: is_non_empty_string(x) and is_valid_instance_id(x),
-            validator=lambda x, ctx: validate_instance_exists(x, ctx.connection_manager),
-            options_provider=get_instance_options,
-            description="MongoDB实例名称（注意：参数名为instance_id但实际使用实例名称）",
-            user_friendly_name="MongoDB实例"
-        )
-        
-        validator.add_required_parameter(
-            name="database_name",
-            type_check=lambda x: is_non_empty_string(x) and is_valid_database_name(x),
-            validator=validate_database_exists,
-            options_provider=get_database_options,
-            description="数据库名称",
-            user_friendly_name="数据库"
-        )
-        
-        validator.add_required_parameter(
-            name="collection_name",
-            type_check=lambda x: is_non_empty_string(x) and is_valid_collection_name(x),
-            validator=validate_collection_exists,
-            options_provider=get_collection_options,
-            description="集合名称",
-            user_friendly_name="集合"
-        )
-        
-        validator.add_required_parameter(
-            name="query_description",
-            type_check=is_non_empty_string,
-            description="查询的自然语言描述，例如：'查找所有状态为激活的用户'",
-            user_friendly_name="查询描述"
-        )
-        
-        validator.add_optional_parameter(
-            name="query_type",
-            type_check=lambda x: x in ["auto", "find", "count", "aggregate", "distinct"],
-            description="查询类型，auto表示自动识别",
-            user_friendly_name="查询类型"
-        )
-        
-        validator.add_optional_parameter(
-            name="limit",
-            type_check=lambda x: is_positive_integer(x) and 1 <= x <= 1000,
-            description="结果限制数量，范围1-1000",
-            user_friendly_name="结果数量限制"
-        )
-        
-        validator.add_optional_parameter(
-            name="include_explanation",
-            type_check=is_boolean,
-            description="是否包含查询解释",
-            user_friendly_name="包含解释"
-        )
-        
-        validator.add_optional_parameter(
-            name="output_format",
-            type_check=lambda x: x in ["full", "query_only", "executable"],
-            description="输出格式选择",
-            user_friendly_name="输出格式"
-        )
-        
-        return validator
-
-    @with_error_handling({"component": "query_generation", "operation": "execute"})
-    @with_retry(RetryConfig(max_attempts=2, base_delay=1.0))
+    @with_error_handling("查询生成")
     async def execute(self, arguments: Dict[str, Any]) -> List[TextContent]:
         """执行查询生成"""
-        # 参数验证和智能补全
-        context = self.context_manager.get_or_create_context()
-        context.connection_manager = self.connection_manager
-        
-        # 尝试从上下文推断缺失参数
-        inferred_params = context.infer_missing_parameters()
-        for param_name in ["instance_id", "database_name", "collection_name"]:
-            if not arguments.get(param_name) and inferred_params.get(param_name):
-                arguments[param_name] = inferred_params[param_name]
-                logger.info(f"从上下文推断{param_name}", value=arguments[param_name])
-        
-        # 更新上下文以支持数据库和集合选项的获取
-        if arguments.get("instance_id"):
-            context = context.clone_with_updates(instance_id=arguments["instance_id"])
-        if arguments.get("database_name"):
-            context = context.clone_with_updates(database_name=arguments["database_name"])
-        
-        validation_result, errors = await self.validator.validate_parameters(arguments, context)
-        
-        if validation_result != ValidationResult.VALID:
-            return MCPParameterHelper.create_error_response(errors)
-        
-        # 记录工具调用到上下文并更新上下文
-        context.add_to_chain("generate_query", arguments)
-        self.context_manager.update_context(
-            instance_id=arguments["instance_id"],
-            database_name=arguments["database_name"],
-            collection_name=arguments["collection_name"]
-        )
-        
-        instance_id = arguments["instance_id"]
-        database_name = arguments["database_name"]
-        collection_name = arguments["collection_name"]
+        session_id = arguments.get("session_id", "default")
         query_description = arguments["query_description"]
         query_type = arguments.get("query_type", "auto")
-        limit = arguments.get("limit", 100)
-        include_explanation = arguments.get("include_explanation", True)
-        output_format = arguments.get("output_format", "full")
+        limit = arguments.get("limit", 10)
+        user_confirmation = arguments.get("user_confirmation")
+        skip_confirmation = arguments.get("skip_confirmation", False)
         
-        logger.info(
-            "开始生成查询",
-            instance_id=instance_id,
-            database=database_name,
-            collection=collection_name,
-            description=query_description
+        # 从工作流上下文获取缺失参数
+        workflow_data = await self.workflow_manager.get_workflow_data(session_id)
+        
+        instance_id = arguments.get("instance_id") or workflow_data.get("instance_id")
+        database_name = arguments.get("database_name") or workflow_data.get("database_name")
+        collection_name = arguments.get("collection_name") or workflow_data.get("collection_name")
+        
+        # 验证必需参数
+        if not instance_id:
+            return [TextContent(
+                type="text",
+                text="## ❌ 缺少实例信息\n\n请先选择MongoDB实例。"
+            )]
+            
+        if not database_name:
+            return [TextContent(
+                type="text",
+                text="## ❌ 缺少数据库信息\n\n请先选择数据库。"
+            )]
+            
+        if not collection_name:
+            return [TextContent(
+                type="text",
+                text="## ❌ 缺少集合信息\n\n请先选择集合。"
+            )]
+        
+        # 验证连接
+        if not self.connection_manager.has_instance(instance_id):
+            return [TextContent(
+                type="text",
+                text=f"## ❌ 实例不存在\n\n实例 `{instance_id}` 不存在。"
+            )]
+        
+        # 生成查询语句
+        try:
+            query_info = await self._generate_query(
+                instance_id, database_name, collection_name, 
+                query_description, query_type, limit, session_id
+            )
+        except Exception as e:
+            return [TextContent(
+                type="text",
+                text=f"## ❌ 查询生成失败\n\n错误: {str(e)}\n\n请检查查询描述是否清晰，或尝试更简单的查询。"
+            )]
+        
+        # 如果跳过确认，直接返回查询语句
+        if skip_confirmation:
+            return await self._show_query_only(query_info)
+        
+        # 如果没有用户确认，显示确认提示
+        if not user_confirmation:
+            return await self._show_confirmation_prompt(query_info)
+        
+        # 处理用户确认
+        return await self._handle_user_confirmation(user_confirmation, query_info, session_id)
+    
+    async def _generate_query(self, instance_id: str, database_name: str, collection_name: str,
+                            query_description: str, query_type: str, limit: int, session_id: str) -> Dict[str, Any]:
+        """生成MongoDB查询语句"""
+        logger.info("生成查询语句", 
+                   instance_id=instance_id,
+                   database_name=database_name,
+                   collection_name=collection_name,
+                   query_description=query_description,
+                   query_type=query_type)
+        
+        # 获取集合结构信息
+        collection_info = await self._get_collection_info(instance_id, database_name, collection_name)
+        
+        # 使用语义分析器来理解查询意图
+        semantic_info = await self._analyze_query_semantics(
+            instance_id, database_name, collection_name, query_description
         )
         
-        try:
-            # 验证实例和集合
-            validation_result = await self._validate_target(instance_id, database_name, collection_name)
-            if validation_result:
-                return [TextContent(type="text", text=validation_result)]
-            
-            # 获取集合字段信息
-            fields = await self.metadata_manager.get_fields_by_collection(
-                instance_id, instance_id, database_name, collection_name
-            )
-            
-            if not fields:
-                return [TextContent(
-                    type="text",
-                    text=f"集合 '{database_name}.{collection_name}' 没有字段信息。请先使用 analyze_collection 工具扫描集合结构。"
-                )]
-            
-            # 分析查询描述
-            query_analysis = await self._analyze_query_description(
-                query_description, fields, query_type
-            )
-            
-            # 生成查询
-            query_result = await self._generate_query(
-                query_analysis, fields, limit
-            )
-            
-            if "error" in query_result:
-                return [TextContent(type="text", text=f"生成查询失败: {query_result['error']}")]
-            
-            # 构建结果
-            result_text = await self._build_query_result(
-                query_result, query_description, instance_id, database_name, 
-                collection_name, include_explanation, query_analysis, output_format
-            )
-            
-            # 保存查询历史
-            await self._save_query_history(
-                instance_id, database_name, collection_name,
-                query_description, query_result
-            )
-            
-            logger.info(
-                "查询生成完成",
-                instance_id=instance_id,
-                database=database_name,
-                collection=collection_name,
-                query_type=query_result.get("query_type")
-            )
-            
-            return [TextContent(type="text", text=result_text)]
-            
-        except Exception as e:
-            error_msg = f"生成查询时发生错误: {str(e)}"
-            logger.error(
-                "查询生成失败",
-                instance_id=instance_id,
-                database=database_name,
-                collection=collection_name,
-                error=str(e)
-            )
-            return [TextContent(type="text", text=error_msg)]
+        # 基于结构和语义信息生成查询
+        mongodb_query = await self._build_mongodb_query(
+            collection_info, semantic_info, query_description, query_type, limit
+        )
+        
+        # 估算结果数量
+        estimated_count = await self._estimate_result_count(
+            instance_id, database_name, collection_name, mongodb_query
+        )
+        
+        return {
+            "instance_id": instance_id,
+            "database_name": database_name,
+            "collection_name": collection_name,
+            "query_description": query_description,
+            "query_type": mongodb_query.get("operation", query_type),
+            "mongodb_query": mongodb_query,
+            "limit": limit,
+            "estimated_result_count": estimated_count,
+            "collection_info": collection_info,
+            "semantic_info": semantic_info
+        }
     
-    @with_error_handling({"component": "query_generation", "operation": "validate_target"})
-    async def _validate_target(self, instance_id: str, database_name: str, collection_name: str) -> Optional[str]:
-        """验证目标实例和集合"""
-        # 验证实例
-        if not self.connection_manager.has_instance(instance_id):
-            return f"实例 '{instance_id}' 不存在。请使用 discover_instances 工具查看可用实例。"
-        
-        # 检查实例健康状态
-        health_status = await self.connection_manager.check_instance_health(instance_id)
-        if not health_status["healthy"]:
-            return f"实例 '{instance_id}' 不健康: {health_status.get('error', 'Unknown error')}"
-        
-        # 验证集合是否存在
+    async def _get_collection_info(self, instance_id: str, database_name: str, collection_name: str) -> Dict[str, Any]:
+        """获取集合结构信息"""
         try:
             connection = self.connection_manager.get_instance_connection(instance_id)
-            if connection:
-                db = connection.get_database(database_name)
-                collection_names = await db.list_collection_names()
-                if collection_name not in collection_names:
-                    return f"集合 '{database_name}.{collection_name}' 不存在。"
-        except Exception as e:
-            return f"验证集合时发生错误: {str(e)}"
-        
-        return None
-    
-    @with_error_handling({"component": "query_generation", "operation": "analyze_query"})
-    async def _analyze_query_description(self, description: str, fields: List[Dict[str, Any]], 
-                                       query_type: str) -> Dict[str, Any]:
-        """分析查询描述"""
-        analysis = {
-            "query_type": query_type,
-            "conditions": [],
-            "projections": [],
-            "sort_fields": [],
-            "group_fields": [],
-            "time_filters": [],
-            "text_searches": [],
-            "numeric_ranges": []
-        }
-        
-        description_lower = description.lower()
-        
-        # 自动识别查询类型
-        if query_type == "auto":
-            analysis["query_type"] = self._detect_query_type(description_lower)
-        
-        # 获取字段建议
-        field_suggestions = self.semantic_analyzer.get_semantic_suggestions_for_query(
-            description, fields
-        )
-        
-        # 检查是否有未知字段需要语义补全
-        unknown_fields = self._detect_unknown_fields(description, field_suggestions)
-        if unknown_fields:
-            # 尝试语义补全
-            completion_result = await self._try_semantic_completion(
-                description, unknown_fields, fields
-            )
-            if completion_result.get("suggestions"):
-                # 合并补全建议到字段建议中
-                field_suggestions.extend(completion_result["suggestions"])
-                analysis["semantic_completion"] = completion_result
-        
-        # 分析条件
-        analysis["conditions"] = self._extract_conditions(
-            description, field_suggestions
-        )
-        
-        # 分析时间过滤
-        analysis["time_filters"] = self._extract_time_filters(
-            description, field_suggestions
-        )
-        
-        # 分析文本搜索
-        analysis["text_searches"] = self._extract_text_searches(
-            description, field_suggestions
-        )
-        
-        # 分析数值范围
-        analysis["numeric_ranges"] = self._extract_numeric_ranges(
-            description, field_suggestions
-        )
-        
-        # 分析排序
-        analysis["sort_fields"] = self._extract_sort_fields(
-            description, field_suggestions
-        )
-        
-        # 分析分组（用于聚合查询）
-        if analysis["query_type"] == "aggregate":
-            analysis["group_fields"] = self._extract_group_fields(
-                description, field_suggestions
-            )
-        
-        return analysis
-    
-    def _detect_unknown_fields(self, description: str, field_suggestions: List[Dict[str, Any]]) -> List[str]:
-        """检测查询描述中的未知字段"""
-        import jieba
-        
-        # 分词提取可能的字段名
-        words = list(jieba.cut(description))
-        
-        # 过滤出可能是字段名的词汇
-        potential_fields = []
-        for word in words:
-            if len(word) > 1 and word.isalnum():
-                potential_fields.append(word)
-        
-        # 检查哪些字段在现有建议中找不到
-        existing_fields = {suggestion.get("field_path", "").lower() 
-                          for suggestion in field_suggestions}
-        
-        unknown_fields = []
-        for field in potential_fields:
-            if field.lower() not in existing_fields:
-                # 进一步检查是否真的像字段名
-                if self._looks_like_field_name(field):
-                    unknown_fields.append(field)
-        
-        return unknown_fields
-    
-    def _looks_like_field_name(self, word: str) -> bool:
-        """判断词汇是否像字段名"""
-        # 简单的启发式规则
-        if len(word) < 2:
-            return False
-        
-        # 包含常见字段关键词
-        field_keywords = ["名称", "姓名", "时间", "日期", "状态", "类型", "编号", "ID", "id", 
-                         "name", "time", "date", "status", "type", "code", "number"]
-        
-        for keyword in field_keywords:
-            if keyword in word:
-                return True
-        
-        # 或者是英文字段名模式
-        if word.replace("_", "").isalnum() and any(c.islower() for c in word):
-            return True
+            if not connection or not connection.client:
+                raise ValueError(f"实例 {instance_id} 连接不可用")
             
-        return False
-    
-    async def _try_semantic_completion(self, description: str, unknown_fields: List[str], 
-                                     fields: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """尝试语义补全"""
-        try:
-            # 调用统一语义工具进行语义建议
-            completion_args = {
-                "action": "suggest_semantics",
-                "instance_name": "default",  # 使用默认实例
-                "query_description": description,
-                "unknown_fields": unknown_fields,
-                "available_fields": [field.get("field_path", "") for field in fields],
-                "field_types": {field.get("field_path", ""): field.get("field_type", "string") 
-                               for field in fields}
+            db = connection.client[database_name]
+            collection = db[collection_name]
+            
+            # 获取样本文档来分析结构
+            sample_docs = []
+            async for doc in collection.find().limit(5):
+                sample_docs.append(doc)
+            
+            # 分析字段结构
+            field_info = {}
+            if sample_docs:
+                for doc in sample_docs:
+                    if isinstance(doc, dict):
+                        for field, value in doc.items():
+                            if field not in field_info:
+                                field_info[field] = {
+                                    "name": field,
+                                    "types": set(),
+                                    "sample_values": []
+                                }
+                            
+                            # 记录字段类型
+                            field_info[field]["types"].add(type(value).__name__)
+                            
+                            # 记录样本值（避免太长）
+                            if len(field_info[field]["sample_values"]) < 3:
+                                sample_value = str(value)[:50] if len(str(value)) > 50 else str(value)
+                                field_info[field]["sample_values"].append(sample_value)
+            
+            # 转换为列表格式
+            fields = []
+            for field_name, info in field_info.items():
+                fields.append({
+                    "name": field_name,
+                    "types": list(info["types"]),
+                    "sample_values": info["sample_values"]
+                })
+            
+            return {
+                "collection_name": collection_name,
+                "document_count": await collection.count_documents({}),
+                "fields": fields,
+                "sample_documents": sample_docs[:2]  # 保留2个样本文档
             }
             
-            result = await self.unified_semantic.execute(completion_args)
-            
-            # 解析结果
-            if result and len(result) > 0:
-                content = result[0].text if hasattr(result[0], 'text') else str(result[0])
-                try:
-                    return json.loads(content)
-                except json.JSONDecodeError:
-                    return {"suggestions": [], "message": content}
-            
-            return {"suggestions": []}
-            
         except Exception as e:
-            logger.warning("语义补全失败", error=str(e))
-            return {"suggestions": [], "error": str(e)}
-        
-    def _detect_query_type(self, description: str) -> str:
-        """检测查询类型"""
-        for pattern, query_type in self.query_patterns.items():
-            if re.search(pattern, description):
-                if query_type in ['find', 'count', 'aggregate', 'distinct']:
-                    return query_type
-        
-        # 默认为查找
-        return 'find'
+            logger.error("获取集合信息失败", error=str(e))
+            raise
     
-    def _extract_conditions(self, description: str, field_suggestions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """提取查询条件"""
+    async def _analyze_query_semantics(self, instance_id: str, database_name: str, 
+                                     collection_name: str, query_description: str) -> Dict[str, Any]:
+        """分析查询的语义意图"""
+        try:
+            # 使用语义分析器分析查询意图
+            return await self.semantic_analyzer.analyze_query_intent(
+                query_description, instance_id, database_name, collection_name
+            )
+        except Exception as e:
+            logger.warning("语义分析失败，使用基础分析", error=str(e))
+            # 基础的关键词分析
+            return self._basic_query_analysis(query_description)
+    
+    def _basic_query_analysis(self, query_description: str) -> Dict[str, Any]:
+        """基础查询意图分析"""
+        description_lower = query_description.lower()
+        
+        # 检测查询类型
+        if any(keyword in description_lower for keyword in ["count", "数量", "多少", "统计"]):
+            operation = "count"
+        elif any(keyword in description_lower for keyword in ["distinct", "唯一", "去重", "不同"]):
+            operation = "distinct"
+        elif any(keyword in description_lower for keyword in ["sum", "average", "max", "min", "group", "聚合", "分组", "求和", "平均"]):
+            operation = "aggregate"
+        else:
+            operation = "find"
+        
+        # 提取可能的字段名和条件
+        potential_fields = []
         conditions = []
         
-        # 简单的条件提取逻辑
-        for field_info in field_suggestions[:5]:  # 只考虑前5个最相关的字段
-            field_path = field_info["field_path"]
-            business_meaning = field_info.get("business_meaning", "")
-            
-            # 检查是否在描述中提到了这个字段
-            field_mentioned = False
-            for word in [field_path.lower(), business_meaning.lower()]:
-                if word and word in description.lower():
-                    field_mentioned = True
-                    break
-            
-            if field_mentioned:
-                # 尝试提取条件操作符和值
-                condition = self._extract_field_condition(description, field_path, field_info)
-                if condition:
-                    conditions.append(condition)
+        # 简单的字段提取（基于常见模式）
+        import re
         
-        return conditions
+        # 查找类似 "field = value" 的模式
+        equals_patterns = re.findall(r'(\w+)\s*[=等于是]\s*["\']?([^"\'，,]+)["\']?', description_lower)
+        for field, value in equals_patterns:
+            potential_fields.append(field)
+            conditions.append({"field": field, "operator": "equals", "value": value.strip()})
+        
+        # 查找类似 "field > value" 的模式
+        comparison_patterns = re.findall(r'(\w+)\s*([>大于<小于>=<=])\s*(\d+)', description_lower)
+        for field, operator, value in comparison_patterns:
+            potential_fields.append(field)
+            op_map = {">": "gt", "大于": "gt", "<": "lt", "小于": "lt", ">=": "gte", "<=": "lte"}
+            conditions.append({"field": field, "operator": op_map.get(operator, "gt"), "value": int(value)})
+        
+        return {
+            "operation": operation,
+            "potential_fields": potential_fields,
+            "conditions": conditions,
+            "confidence": 0.6  # 基础分析的置信度较低
+        }
     
-    def _extract_field_condition(self, description: str, field_path: str, 
-                               field_info: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """提取特定字段的条件"""
-        field_type = field_info.get("field_type", "string")
-        
-        # 查找操作符
-        operator = "$eq"  # 默认等于
-        
-        for pattern, op in self.query_patterns.items():
-            if op.startswith("$") and re.search(pattern, description):
-                operator = op
-                break
-        
-        # 尝试提取值
-        value = self._extract_field_value(description, field_path, field_type)
-        
-        if value is not None:
-            condition = {
-                "field": field_path,
-                "operator": operator,
-                "value": value,
-                "field_type": field_type
-            }
-            
-            # 处理特殊操作符
-            if operator == "$range":
-                # 范围查询需要两个值
-                range_values = self._extract_range_values(description, field_type)
-                if range_values:
-                    condition["value"] = range_values
-            elif operator == "$regex":
-                # 正则表达式查询
-                condition["value"] = {"$regex": str(value), "$options": "i"}
-            elif operator in ["$exists", "$not_exists"]:
-                condition["value"] = operator == "$exists"
-                condition["operator"] = "$exists"
-            elif operator in ["$null", "$not_null"]:
-                if operator == "$null":
-                    condition["operator"] = "$eq"
-                    condition["value"] = None
-                else:
-                    condition["operator"] = "$ne"
-                    condition["value"] = None
-            
-            return condition
-        
-        return None
-    
-    def _extract_field_value(self, description: str, field_path: str, field_type: str) -> Any:
-        """提取字段值"""
-        # 这里实现简单的值提取逻辑
-        # 在实际应用中，可能需要更复杂的NLP处理
-        
-        # 提取数字
-        if field_type in ["integer", "double", "long"]:
-            numbers = re.findall(r'\d+(?:\.\d+)?', description)
-            if numbers:
-                try:
-                    if field_type == "integer":
-                        return int(float(numbers[0]))
-                    else:
-                        return float(numbers[0])
-                except ValueError:
-                    pass
-        
-        # 提取布尔值
-        if field_type == "boolean":
-            if re.search(r'真|是|true|yes|1', description.lower()):
-                return True
-            elif re.search(r'假|否|false|no|0', description.lower()):
-                return False
-        
-        # 提取字符串（简单实现）
-        # 查找引号中的内容
-        quoted_strings = re.findall(r'["\']([^"\'\']+)["\']', description)
-        if quoted_strings:
-            return quoted_strings[0]
-        
-        # 查找可能的字符串值
-        words = description.split()
-        for i, word in enumerate(words):
-            if field_path.lower() in word.lower() and i + 1 < len(words):
-                next_word = words[i + 1]
-                # 简单的值提取
-                if not re.match(r'^(是|为|等于|大于|小于|包含)$', next_word):
-                    return next_word
-        
-        return None
-    
-    def _extract_range_values(self, description: str, field_type: str) -> Optional[List[Any]]:
-        """提取范围值"""
-        # 查找 "X 到 Y" 或 "X - Y" 模式
-        range_patterns = [
-            r'(\d+(?:\.\d+)?)\s*到\s*(\d+(?:\.\d+)?)',
-            r'(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)',
-            r'(\d+(?:\.\d+)?)\s*至\s*(\d+(?:\.\d+)?)',
-        ]
-        
-        for pattern in range_patterns:
-            match = re.search(pattern, description)
-            if match:
-                try:
-                    start_val = float(match.group(1))
-                    end_val = float(match.group(2))
-                    
-                    if field_type == "integer":
-                        return [int(start_val), int(end_val)]
-                    else:
-                        return [start_val, end_val]
-                except ValueError:
-                    continue
-        
-        return None
-    
-    def _extract_time_filters(self, description: str, field_suggestions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """提取时间过滤条件"""
-        time_filters = []
-        
-        # 查找时间字段
-        time_fields = [f for f in field_suggestions if 'time' in f["field_path"].lower() or 
-                      'date' in f["field_path"].lower() or f.get("field_type") == "date"]
-        
-        if not time_fields:
-            return time_filters
-        
-        # 查找时间关键词
-        for pattern, time_value in self.time_keywords.items():
-            if re.search(pattern, description):
-                for time_field in time_fields:
-                    time_range = self._calculate_time_range(time_value)
-                    if time_range:
-                        time_filters.append({
-                            "field": time_field["field_path"],
-                            "operator": "$gte",
-                            "value": time_range["start"]
-                        })
-                        time_filters.append({
-                            "field": time_field["field_path"],
-                            "operator": "$lt",
-                            "value": time_range["end"]
-                        })
-                break
-        
-        return time_filters
-    
-    def _calculate_time_range(self, time_value: Union[int, str]) -> Optional[Dict[str, datetime]]:
-        """计算时间范围"""
-        now = datetime.now()
-        
-        if isinstance(time_value, int):
-            # 相对天数
-            target_date = now + timedelta(days=time_value)
-            return {
-                "start": target_date.replace(hour=0, minute=0, second=0, microsecond=0),
-                "end": target_date.replace(hour=23, minute=59, second=59, microsecond=999999)
-            }
-        elif time_value == "this_week":
-            # 本周
-            start_of_week = now - timedelta(days=now.weekday())
-            end_of_week = start_of_week + timedelta(days=6)
-            return {
-                "start": start_of_week.replace(hour=0, minute=0, second=0, microsecond=0),
-                "end": end_of_week.replace(hour=23, minute=59, second=59, microsecond=999999)
-            }
-        elif time_value == "this_month":
-            # 本月
-            start_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-            if now.month == 12:
-                end_of_month = start_of_month.replace(year=now.year + 1, month=1) - timedelta(days=1)
-            else:
-                end_of_month = start_of_month.replace(month=now.month + 1) - timedelta(days=1)
-            return {
-                "start": start_of_month,
-                "end": end_of_month.replace(hour=23, minute=59, second=59, microsecond=999999)
-            }
-        
-        return None
-    
-    def _extract_text_searches(self, description: str, field_suggestions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """提取文本搜索条件"""
-        text_searches = []
-        
-        # 查找文本字段
-        text_fields = [f for f in field_suggestions if f.get("field_type") == "string"]
-        
-        # 查找包含关键词
-        if re.search(r'包含|含有', description):
-            # 提取要搜索的文本
-            search_terms = re.findall(r'包含["\']([^"\'\']+)["\']', description)
-            if not search_terms:
-                search_terms = re.findall(r'含有["\']([^"\'\']+)["\']', description)
-            
-            for term in search_terms:
-                for field in text_fields[:3]:  # 限制字段数量
-                    text_searches.append({
-                        "field": field["field_path"],
-                        "operator": "$regex",
-                        "value": {"$regex": term, "$options": "i"}
-                    })
-        
-        return text_searches
-    
-    def _extract_numeric_ranges(self, description: str, field_suggestions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """提取数值范围条件"""
-        numeric_ranges = []
-        
-        # 查找数值字段
-        numeric_fields = [f for f in field_suggestions if 
-                         f.get("field_type") in ["integer", "double", "long"]]
-        
-        # 查找范围表达式
-        range_patterns = [
-            r'(\w+)\s*在\s*(\d+(?:\.\d+)?)\s*到\s*(\d+(?:\.\d+)?)\s*之间',
-            r'(\w+)\s*范围\s*(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)',
-        ]
-        
-        for pattern in range_patterns:
-            matches = re.finditer(pattern, description)
-            for match in matches:
-                field_name = match.group(1)
-                start_val = float(match.group(2))
-                end_val = float(match.group(3))
-                
-                # 查找匹配的字段
-                for field in numeric_fields:
-                    if (field_name.lower() in field["field_path"].lower() or 
-                        field_name.lower() in field.get("business_meaning", "").lower()):
-                        
-                        field_type = field.get("field_type")
-                        if field_type == "integer":
-                            start_val = int(start_val)
-                            end_val = int(end_val)
-                        
-                        numeric_ranges.extend([
-                            {
-                                "field": field["field_path"],
-                                "operator": "$gte",
-                                "value": start_val
-                            },
-                            {
-                                "field": field["field_path"],
-                                "operator": "$lte",
-                                "value": end_val
-                            }
-                        ])
-                        break
-        
-        return numeric_ranges
-    
-    def _extract_sort_fields(self, description: str, field_suggestions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """提取排序字段"""
-        sort_fields = []
-        
-        # 查找排序关键词
-        sort_patterns = [
-            (r'按\s*(\w+)\s*升序|按\s*(\w+)\s*正序', 1),
-            (r'按\s*(\w+)\s*降序|按\s*(\w+)\s*倒序', -1),
-            (r'(\w+)\s*从小到大', 1),
-            (r'(\w+)\s*从大到小', -1),
-        ]
-        
-        for pattern, direction in sort_patterns:
-            matches = re.finditer(pattern, description)
-            for match in matches:
-                field_name = match.group(1) or match.group(2)
-                if field_name:
-                    # 查找匹配的字段
-                    for field in field_suggestions:
-                        if (field_name.lower() in field["field_path"].lower() or 
-                            field_name.lower() in field.get("business_meaning", "").lower()):
-                            sort_fields.append({
-                                "field": field["field_path"],
-                                "direction": direction
-                            })
-                            break
-        
-        return sort_fields
-    
-    def _extract_group_fields(self, description: str, field_suggestions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """提取分组字段"""
-        group_fields = []
-        
-        # 查找分组关键词
-        group_patterns = [
-            r'按\s*(\w+)\s*分组',
-            r'根据\s*(\w+)\s*分组',
-            r'以\s*(\w+)\s*为组',
-        ]
-        
-        for pattern in group_patterns:
-            matches = re.finditer(pattern, description)
-            for match in matches:
-                field_name = match.group(1)
-                # 查找匹配的字段
-                for field in field_suggestions:
-                    if (field_name.lower() in field["field_path"].lower() or 
-                        field_name.lower() in field.get("business_meaning", "").lower()):
-                        group_fields.append({
-                            "field": field["field_path"]
-                        })
-                        break
-        
-        return group_fields
-    
-    @with_error_handling({"component": "query_generation", "operation": "generate_query"})
-    @with_retry(RetryConfig(max_attempts=2, base_delay=1.0))
-    async def _generate_query(self, analysis: Dict[str, Any], fields: List[Dict[str, Any]], 
-                            limit: int) -> Dict[str, Any]:
-        """生成查询语句"""
-        query_type = analysis["query_type"]
-        
-        try:
-            if query_type == "find":
-                return self._generate_find_query(analysis, limit)
-            elif query_type == "count":
-                return self._generate_count_query(analysis)
-            elif query_type == "aggregate":
-                return self._generate_aggregate_query(analysis, limit)
-            elif query_type == "distinct":
-                return self._generate_distinct_query(analysis, fields)
-            else:
-                return {"error": f"不支持的查询类型: {query_type}"}
-                
-        except Exception as e:
-            return {"error": f"生成查询时发生错误: {str(e)}"}
-    
-    @with_error_handling({"component": "query_generation", "operation": "generate_find_query"})
-    def _generate_find_query(self, analysis: Dict[str, Any], limit: int) -> Dict[str, Any]:
-        """生成查找查询"""
-        query = {}
+    async def _build_mongodb_query(self, collection_info: Dict[str, Any], semantic_info: Dict[str, Any],
+                                 query_description: str, query_type: str, limit: int) -> Dict[str, Any]:
+        """构建MongoDB查询语句"""
+        operation = semantic_info.get("operation", query_type)
+        if operation == "auto":
+            operation = "find"
         
         # 构建查询条件
-        all_conditions = (analysis["conditions"] + analysis["time_filters"] + 
-                         analysis["text_searches"] + analysis["numeric_ranges"])
+        query_filter = {}
         
-        for condition in all_conditions:
+        # 根据语义信息构建过滤条件
+        conditions = semantic_info.get("conditions", [])
+        for condition in conditions:
             field = condition["field"]
             operator = condition["operator"]
             value = condition["value"]
             
-            if operator == "$eq":
-                query[field] = value
-            elif operator in ["$ne", "$gt", "$gte", "$lt", "$lte"]:
-                if field not in query:
-                    query[field] = {}
-                query[field][operator] = value
-            elif operator == "$regex":
-                query[field] = value
-            elif operator == "$exists":
-                query[field] = {"$exists": value}
+            # 验证字段是否存在
+            field_names = [f["name"] for f in collection_info.get("fields", [])]
+            if field in field_names:
+                if operator == "equals":
+                    query_filter[field] = value
+                elif operator == "gt":
+                    query_filter[field] = {"$gt": value}
+                elif operator == "lt":
+                    query_filter[field] = {"$lt": value}
+                elif operator == "gte":
+                    query_filter[field] = {"$gte": value}
+                elif operator == "lte":
+                    query_filter[field] = {"$lte": value}
         
-        # 构建排序
-        sort = []
-        for sort_field in analysis["sort_fields"]:
-            sort.append((sort_field["field"], sort_field["direction"]))
+        # 如果没有明确条件，尝试智能匹配
+        if not query_filter:
+            query_filter = await self._smart_field_matching(collection_info, query_description)
         
-        return {
-            "query_type": "find",
-            "filter": query,
-            "sort": sort,
-            "limit": limit,
-            "mongodb_query": {
-                "filter": query,
-                "sort": dict(sort) if sort else None,
-                "limit": limit
-            }
+        # 构建完整查询
+        mongodb_query = {
+            "operation": operation,
+            "filter": query_filter
         }
+        
+        if operation == "find":
+            mongodb_query["limit"] = limit
+            # 选择要返回的字段（限制返回字段以提高性能）
+            important_fields = self._select_important_fields(collection_info, semantic_info)
+            if important_fields:
+                mongodb_query["projection"] = {field: 1 for field in important_fields}
+        
+        elif operation == "count":
+            # count 查询不需要 limit 和 projection
+            pass
+        
+        elif operation == "distinct":
+            # 为 distinct 查询选择字段
+            distinct_field = self._select_distinct_field(collection_info, semantic_info)
+            mongodb_query["field"] = distinct_field
+        
+        elif operation == "aggregate":
+            # 构建聚合管道
+            mongodb_query["pipeline"] = self._build_aggregation_pipeline(collection_info, semantic_info, query_description)
+        
+        return mongodb_query
     
-    @with_error_handling({"component": "query_generation", "operation": "generate_count_query"})
-    def _generate_count_query(self, analysis: Dict[str, Any]) -> Dict[str, Any]:
-        """生成计数查询"""
-        query = {}
+    async def _smart_field_matching(self, collection_info: Dict[str, Any], query_description: str) -> Dict[str, Any]:
+        """智能字段匹配"""
+        query_filter = {}
+        description_lower = query_description.lower()
         
-        # 构建查询条件（与find查询相同）
-        all_conditions = (analysis["conditions"] + analysis["time_filters"] + 
-                         analysis["text_searches"] + analysis["numeric_ranges"])
-        
-        for condition in all_conditions:
-            field = condition["field"]
-            operator = condition["operator"]
-            value = condition["value"]
+        # 遍历字段，寻找可能的匹配
+        for field_info in collection_info.get("fields", []):
+            field_name = field_info["name"]
+            field_name_lower = field_name.lower()
             
-            if operator == "$eq":
-                query[field] = value
-            elif operator in ["$ne", "$gt", "$gte", "$lt", "$lte"]:
-                if field not in query:
-                    query[field] = {}
-                query[field][operator] = value
-            elif operator == "$regex":
-                query[field] = value
-            elif operator == "$exists":
-                query[field] = {"$exists": value}
+            # 如果查询描述中包含字段名
+            if field_name_lower in description_lower:
+                # 尝试提取值
+                import re
+                # 查找字段名后面的值
+                pattern = f"{field_name_lower}\\s*[=:是为]\\s*[\"']?([^\"'，,\\s]+)[\"']?"
+                match = re.search(pattern, description_lower)
+                if match:
+                    value = match.group(1)
+                    # 尝试转换类型
+                    if value.isdigit():
+                        query_filter[field_name] = int(value)
+                    elif value.replace('.', '').isdigit():
+                        query_filter[field_name] = float(value)
+                    else:
+                        query_filter[field_name] = value
         
-        return {
-            "query_type": "count",
-            "filter": query,
-            "mongodb_query": {
-                "filter": query
-            }
-        }
+        return query_filter
     
-    @with_error_handling({"component": "query_generation", "operation": "generate_aggregate_query"})
-    def _generate_aggregate_query(self, analysis: Dict[str, Any], limit: int) -> Dict[str, Any]:
-        """生成聚合查询"""
+    def _select_important_fields(self, collection_info: Dict[str, Any], semantic_info: Dict[str, Any]) -> List[str]:
+        """选择重要字段"""
+        all_fields = [f["name"] for f in collection_info.get("fields", [])]
+        
+        # 优先选择语义分析中涉及的字段
+        important_fields = semantic_info.get("potential_fields", [])
+        
+        # 添加一些常见的重要字段
+        common_important = ["_id", "id", "name", "title", "status", "created_at", "updated_at"]
+        for field in all_fields:
+            if field.lower() in [f.lower() for f in common_important]:
+                if field not in important_fields:
+                    important_fields.append(field)
+        
+        # 限制字段数量，避免返回过多数据
+        return important_fields[:10]
+    
+    def _select_distinct_field(self, collection_info: Dict[str, Any], semantic_info: Dict[str, Any]) -> str:
+        """选择distinct查询的字段"""
+        potential_fields = semantic_info.get("potential_fields", [])
+        if potential_fields:
+            return potential_fields[0]
+        
+        # 默认选择第一个非_id字段
+        for field_info in collection_info.get("fields", []):
+            if field_info["name"] != "_id":
+                return field_info["name"]
+        
+        return "_id"
+    
+    def _build_aggregation_pipeline(self, collection_info: Dict[str, Any], 
+                                  semantic_info: Dict[str, Any], query_description: str) -> List[Dict[str, Any]]:
+        """构建聚合管道"""
         pipeline = []
         
-        # 添加匹配阶段
-        match_conditions = {}
-        all_conditions = (analysis["conditions"] + analysis["time_filters"] + 
-                         analysis["text_searches"] + analysis["numeric_ranges"])
+        # 基础的聚合管道
+        description_lower = query_description.lower()
         
-        for condition in all_conditions:
-            field = condition["field"]
-            operator = condition["operator"]
-            value = condition["value"]
+        if "group" in description_lower or "分组" in description_lower:
+            # 添加分组阶段
+            group_stage = {"$group": {"_id": None, "count": {"$sum": 1}}}
+            pipeline.append(group_stage)
+        
+        if "sum" in description_lower or "求和" in description_lower:
+            # 查找数值字段进行求和
+            numeric_fields = []
+            for field_info in collection_info.get("fields", []):
+                if any(t in ["int", "float", "Decimal128"] for t in field_info.get("types", [])):
+                    numeric_fields.append(field_info["name"])
             
-            if operator == "$eq":
-                match_conditions[field] = value
-            elif operator in ["$ne", "$gt", "$gte", "$lt", "$lte"]:
-                if field not in match_conditions:
-                    match_conditions[field] = {}
-                match_conditions[field][operator] = value
-            elif operator == "$regex":
-                match_conditions[field] = value
-            elif operator == "$exists":
-                match_conditions[field] = {"$exists": value}
+            if numeric_fields:
+                group_stage = {
+                    "$group": {
+                        "_id": None,
+                        "total": {"$sum": f"${numeric_fields[0]}"}
+                    }
+                }
+                pipeline.append(group_stage)
         
-        if match_conditions:
-            pipeline.append({"$match": match_conditions})
+        # 如果没有特殊聚合，返回基础统计
+        if not pipeline:
+            pipeline = [
+                {"$group": {"_id": None, "count": {"$sum": 1}}},
+                {"$project": {"_id": 0, "total_documents": "$count"}}
+            ]
         
-        # 添加分组阶段
-        if analysis["group_fields"]:
-            group_stage = {
-                "_id": {}
-            }
-            
-            for group_field in analysis["group_fields"]:
-                field_name = group_field["field"].replace(".", "_")
-                group_stage["_id"][field_name] = f"${group_field['field']}"
-            
-            # 添加计数
-            group_stage["count"] = {"$sum": 1}
-            
-            pipeline.append({"$group": group_stage})
-        
-        # 添加排序阶段
-        if analysis["sort_fields"]:
-            sort_stage = {}
-            for sort_field in analysis["sort_fields"]:
-                sort_stage[sort_field["field"]] = sort_field["direction"]
-            pipeline.append({"$sort": sort_stage})
-        
-        # 添加限制阶段
-        pipeline.append({"$limit": limit})
-        
-        return {
-            "query_type": "aggregate",
-            "pipeline": pipeline,
-            "mongodb_query": {
-                "pipeline": pipeline
-            }
-        }
+        return pipeline
     
-    @with_error_handling({"component": "query_generation", "operation": "generate_distinct_query"})
-    def _generate_distinct_query(self, analysis: Dict[str, Any], fields: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """生成去重查询"""
-        # 选择第一个相关字段作为去重字段
-        distinct_field = None
-        
-        if analysis["conditions"]:
-            distinct_field = analysis["conditions"][0]["field"]
-        elif fields:
-            # 选择第一个字段
-            distinct_field = fields[0]["field_path"]
-        
-        if not distinct_field:
-            return {"error": "无法确定去重字段"}
-        
-        # 构建查询条件
-        query = {}
-        all_conditions = (analysis["conditions"] + analysis["time_filters"] + 
-                         analysis["text_searches"] + analysis["numeric_ranges"])
-        
-        for condition in all_conditions:
-            field = condition["field"]
-            operator = condition["operator"]
-            value = condition["value"]
-            
-            if operator == "$eq":
-                query[field] = value
-            elif operator in ["$ne", "$gt", "$gte", "$lt", "$lte"]:
-                if field not in query:
-                    query[field] = {}
-                query[field][operator] = value
-            elif operator == "$regex":
-                query[field] = value
-            elif operator == "$exists":
-                query[field] = {"$exists": value}
-        
-        return {
-            "query_type": "distinct",
-            "field": distinct_field,
-            "filter": query,
-            "mongodb_query": {
-                "field": distinct_field,
-                "filter": query
-            }
-        }
-    
-    @with_error_handling({"component": "query_generation", "operation": "build_query_result"})
-    async def _build_query_result(self, query_result: Dict[str, Any], query_description: str,
-                                instance_id: str, database_name: str, collection_name: str,
-                                include_explanation: bool, analysis: Dict[str, Any] = None, 
-                                output_format: str = "full") -> str:
-        """构建查询结果文本"""
-        query_type = query_result["query_type"]
-        mongodb_query = query_result["mongodb_query"]
-        
-        # 生成可执行的MongoDB查询语句
-        executable_query = self._generate_executable_query(query_type, collection_name, mongodb_query)
-        
-        # 根据输出格式返回不同内容
-        if output_format == "executable":
-            return executable_query
-        elif output_format == "query_only":
-            result_text = f"**查询类型**: {query_type.upper()}\n\n"
-            result_text += f"```javascript\n{executable_query}\n```"
-            return result_text
-        
-        # 默认完整格式
-        result_text = f"## 查询生成结果\n\n"
-        result_text += f"**查询描述**: {query_description}\n\n"
-        
-        # 语义补全信息
-        if analysis and "semantic_completion" in analysis:
-            completion_info = analysis["semantic_completion"]
-            if completion_info.get("suggestions"):
-                result_text += f"### 🔍 智能字段匹配\n\n"
-                result_text += f"系统自动识别并匹配了以下字段：\n\n"
-                for suggestion in completion_info["suggestions"]:
-                    field_path = suggestion.get("field_path", "")
-                    confidence = suggestion.get("confidence", 0)
-                    reason = suggestion.get("reason", "")
-                    result_text += f"- **{field_path}** (置信度: {confidence:.2f}) - {reason}\n"
-                result_text += "\n"
-        
-        result_text += f"### 生成的MongoDB查询\n\n"
-        result_text += f"**查询类型**: {query_type.upper()}\n\n"
-        
-        # 显示可执行的MongoDB查询语句
-        result_text += f"```javascript\n{executable_query}\n```\n\n"
-        
-        # 查询解释
-        if include_explanation:
-            result_text += await self._generate_query_explanation(query_result, query_description)
-        
-        # 使用建议
-        result_text += f"### 使用建议\n\n"
-        result_text += f"- 可直接复制上述查询语句到MongoDB shell或客户端中执行\n"
-        result_text += f"- 使用 `confirm_query` 工具在系统中执行此查询并查看结果\n"
-        result_text += f"- 如果查询结果不符合预期，可以调整查询描述重新生成\n"
-        result_text += f"- 对于大数据集，建议先使用 count 查询确认结果数量\n"
-        
-        return result_text
-    
-    def _generate_executable_query(self, query_type: str, collection_name: str, mongodb_query: Dict[str, Any]) -> str:
-        """生成可直接执行的MongoDB查询语句"""
-        if query_type == "find":
-            filter_query = mongodb_query.get("filter", {})
-            sort_query = mongodb_query.get("sort")
-            limit_query = mongodb_query.get("limit")
-            
-            query_str = f"db.{collection_name}.find("
-            query_str += json.dumps(filter_query, ensure_ascii=False, default=str, separators=(',', ':'))
-            query_str += ")"
-            
-            if sort_query:
-                query_str += f".sort({json.dumps(sort_query, ensure_ascii=False, separators=(',', ':'))})"
-            
-            if limit_query:
-                query_str += f".limit({limit_query})"
-            
-            return query_str
-            
-        elif query_type == "count":
-            filter_query = mongodb_query.get("filter", {})
-            query_str = f"db.{collection_name}.countDocuments("
-            query_str += json.dumps(filter_query, ensure_ascii=False, default=str, separators=(',', ':'))
-            query_str += ")"
-            return query_str
-            
-        elif query_type == "aggregate":
-            pipeline = mongodb_query.get("pipeline", [])
-            query_str = f"db.{collection_name}.aggregate("
-            query_str += json.dumps(pipeline, ensure_ascii=False, default=str, separators=(',', ':'))
-            query_str += ")"
-            return query_str
-            
-        elif query_type == "distinct":
-            field = mongodb_query.get("field")
-            filter_query = mongodb_query.get("filter", {})
-            query_str = f"db.{collection_name}.distinct("
-            query_str += f'"{field}", '
-            query_str += json.dumps(filter_query, ensure_ascii=False, default=str, separators=(',', ':'))
-            query_str += ")"
-            return query_str
-        
-        return f"// 不支持的查询类型: {query_type}"
-    
-    async def _generate_query_explanation(self, query_result: Dict[str, Any], query_description: str) -> str:
-        """生成查询解释"""
-        explanation = f"### 查询解释\n\n"
-        
-        query_type = query_result["query_type"]
-        
-        if query_type == "find":
-            filter_query = query_result.get("filter", {})
-            sort_query = query_result.get("sort", [])
-            limit_query = query_result.get("limit")
-            
-            explanation += f"此查询将：\n"
-            
-            if filter_query:
-                explanation += f"1. **筛选条件**: 根据以下条件筛选文档：\n"
-                for field, condition in filter_query.items():
-                    if isinstance(condition, dict):
-                        for op, value in condition.items():
-                            op_desc = self._get_operator_description(op)
-                            explanation += f"   - {field} {op_desc} {value}\n"
-                    else:
-                        explanation += f"   - {field} 等于 {condition}\n"
-            else:
-                explanation += f"1. **筛选条件**: 无筛选条件，返回所有文档\n"
-            
-            if sort_query:
-                explanation += f"2. **排序**: 按以下字段排序：\n"
-                for field, direction in sort_query:
-                    direction_desc = "升序" if direction == 1 else "降序"
-                    explanation += f"   - {field} ({direction_desc})\n"
-            
-            if limit_query:
-                explanation += f"3. **限制**: 最多返回 {limit_query} 条记录\n"
-            
-        elif query_type == "count":
-            explanation += f"此查询将统计满足条件的文档数量\n"
-            
-        elif query_type == "aggregate":
-            explanation += f"此查询使用聚合管道进行复杂数据处理\n"
-            
-        elif query_type == "distinct":
-            field = query_result.get("field")
-            explanation += f"此查询将返回字段 '{field}' 的所有唯一值\n"
-        
-        explanation += "\n"
-        return explanation
-    
-    def _get_operator_description(self, operator: str) -> str:
-        """获取操作符描述"""
-        descriptions = {
-            "$eq": "等于",
-            "$ne": "不等于",
-            "$gt": "大于",
-            "$gte": "大于等于",
-            "$lt": "小于",
-            "$lte": "小于等于",
-            "$regex": "匹配正则表达式",
-            "$exists": "存在" if operator == "$exists" else "不存在"
-        }
-        return descriptions.get(operator, operator)
-    
-    @with_error_handling({"component": "query_generation", "operation": "save_query_history"})
-    async def _save_query_history(self, instance_id: str, database_name: str, collection_name: str,
-                                query_description: str, query_result: Dict[str, Any]):
-        """保存查询历史"""
+    async def _estimate_result_count(self, instance_id: str, database_name: str, 
+                                   collection_name: str, mongodb_query: Dict[str, Any]) -> int:
+        """估算查询结果数量"""
         try:
-            await self.metadata_manager.save_query_history(
-                instance_id=instance_id,
-                database_name=database_name,
-                collection_name=collection_name,
-                query_description=query_description,
-                query_type=query_result["query_type"],
-                mongodb_query=query_result["mongodb_query"],
-                generated_at=datetime.now()
-            )
+            connection = self.connection_manager.get_instance_connection(instance_id)
+            if not connection or not connection.client:
+                return -1
+            
+            db = connection.client[database_name]
+            collection = db[collection_name]
+            
+            # 对于简单查询，直接统计
+            if mongodb_query.get("operation") == "count":
+                return await collection.count_documents(mongodb_query.get("filter", {}))
+            elif mongodb_query.get("operation") == "find":
+                # 限制统计时间，如果超过1000条就返回估算值
+                filter_query = mongodb_query.get("filter", {})
+                if not filter_query:
+                    # 无过滤条件，返回总文档数
+                    return await collection.count_documents({})
+                else:
+                    # 有过滤条件，统计匹配数量
+                    return await collection.count_documents(filter_query)
+            else:
+                # 其他类型查询，返回未知
+                return -1
+                
         except Exception as e:
-            logger.warning("保存查询历史失败", error=str(e))
+            logger.warning("估算结果数量失败", error=str(e))
+            return -1
+    
+    async def _show_query_only(self, query_info: Dict[str, Any]) -> List[TextContent]:
+        """仅显示生成的查询语句"""
+        text = f"## 🔍 生成的MongoDB查询语句\n\n"
+        text += f"**查询描述**: {query_info['query_description']}\n"
+        text += f"**目标集合**: `{query_info['instance_id']}.{query_info['database_name']}.{query_info['collection_name']}`\n"
+        text += f"**查询类型**: {query_info['query_type']}\n\n"
+        
+        text += "### 📄 MongoDB查询语句\n\n"
+        text += "```javascript\n"
+        
+        # 格式化显示查询语句
+        mongodb_query = query_info["mongodb_query"]
+        operation = mongodb_query.get("operation", "find")
+        
+        if operation == "find":
+            filter_part = mongodb_query.get("filter", {})
+            projection_part = mongodb_query.get("projection", {})
+            limit_part = mongodb_query.get("limit", 10)
+            
+            text += f"db.{query_info['collection_name']}.find("
+            if filter_part:
+                import json
+                text += json.dumps(filter_part, indent=2, ensure_ascii=False)
+            else:
+                text += "{}"
+            
+            if projection_part:
+                text += ",\n  "
+                text += json.dumps(projection_part, indent=2, ensure_ascii=False)
+            
+            text += f").limit({limit_part})"
+            
+        elif operation == "count":
+            filter_part = mongodb_query.get("filter", {})
+            text += f"db.{query_info['collection_name']}.countDocuments("
+            if filter_part:
+                import json
+                text += json.dumps(filter_part, indent=2, ensure_ascii=False)
+            else:
+                text += "{}"
+            text += ")"
+            
+        elif operation == "distinct":
+            field = mongodb_query.get("field", "_id")
+            filter_part = mongodb_query.get("filter", {})
+            text += f'db.{query_info["collection_name"]}.distinct("{field}"'
+            if filter_part:
+                text += ", "
+                import json
+                text += json.dumps(filter_part, indent=2, ensure_ascii=False)
+            text += ")"
+            
+        elif operation == "aggregate":
+            pipeline = mongodb_query.get("pipeline", [])
+            text += f"db.{query_info['collection_name']}.aggregate("
+            import json
+            text += json.dumps(pipeline, indent=2, ensure_ascii=False)
+            text += ")"
+        
+        text += "\n```\n\n"
+        
+        # 显示预期结果
+        if query_info.get("estimated_result_count", -1) >= 0:
+            text += f"**预期结果数量**: 约 {query_info['estimated_result_count']} 条\n"
+        
+        text += f"**结果限制**: 最多返回 {query_info.get('limit', 10)} 条\n\n"
+        text += "💡 **提示**: 使用 `generate_query()` 并提供 `user_confirmation` 参数来执行查询"
+        
+        return [TextContent(type="text", text=text)]
+    
+    async def _show_confirmation_prompt(self, query_info: Dict[str, Any]) -> List[TextContent]:
+        """显示确认提示"""
+        return [UserConfirmationHelper.create_query_confirmation_prompt(query_info)]
+    
+    async def _handle_user_confirmation(self, user_confirmation: str, 
+                                      query_info: Dict[str, Any], session_id: str) -> List[TextContent]:
+        """处理用户确认"""
+        choice_upper = user_confirmation.upper()
+        
+        if choice_upper in ['A', 'CONFIRM', 'EXECUTE']:
+            # 确认执行查询
+            return await self._execute_query(query_info, session_id)
+            
+        elif choice_upper in ['B', 'MODIFY', 'REGENERATE']:
+            # 重新生成查询
+            return [TextContent(
+                type="text",
+                text="## 🔧 重新生成查询\n\n请使用不同的查询描述重新调用 `generate_query(query_description=\"新的查询描述\")`"
+            )]
+            
+        elif choice_upper in ['C', 'PLAN', 'EXPLAIN']:
+            # 查看执行计划
+            return await self._show_execution_plan(query_info)
+            
+        elif choice_upper in ['D', 'CANCEL']:
+            # 取消执行
+            return [TextContent(
+                type="text",
+                text="## ❌ 已取消查询执行"
+            )]
+        else:
+            # 无效选择
+            return [TextContent(
+                type="text",
+                text=f"## ❌ 无效选择\n\n选择 '{user_confirmation}' 无效。请选择 A（执行）、B（修改）、C（查看计划）或 D（取消）。"
+            )]
+    
+    async def _execute_query(self, query_info: Dict[str, Any], session_id: str) -> List[TextContent]:
+        """执行查询"""
+        logger.info("执行确认的查询", 
+                   instance_id=query_info["instance_id"],
+                   database_name=query_info["database_name"],
+                   collection_name=query_info["collection_name"])
+        
+        try:
+            # 更新工作流状态
+            update_data = {
+                "instance_id": query_info["instance_id"],
+                "database_name": query_info["database_name"],
+                "collection_name": query_info["collection_name"],
+                "generated_query": query_info["mongodb_query"]
+            }
+            
+            await self.workflow_manager.update_workflow_data(session_id, update_data)
+            
+            # 执行查询
+            results = await self._run_mongodb_query(query_info)
+            
+            # 格式化结果
+            return await self._format_query_results(query_info, results)
+            
+        except Exception as e:
+            logger.error("查询执行失败", error=str(e))
+            return [TextContent(
+                type="text",
+                text=f"## ❌ 查询执行失败\n\n错误: {str(e)}\n\n请检查查询语句或数据库连接。"
+            )]
+    
+    async def _run_mongodb_query(self, query_info: Dict[str, Any]) -> Any:
+        """运行MongoDB查询"""
+        connection = self.connection_manager.get_instance_connection(query_info["instance_id"])
+        if not connection or not connection.client:
+            raise ValueError("数据库连接不可用")
+        
+        db = connection.client[query_info["database_name"]]
+        collection = db[query_info["collection_name"]]
+        mongodb_query = query_info["mongodb_query"]
+        operation = mongodb_query.get("operation", "find")
+        
+        if operation == "find":
+            filter_query = mongodb_query.get("filter", {})
+            projection = mongodb_query.get("projection", {})
+            limit = mongodb_query.get("limit", 10)
+            
+            cursor = collection.find(filter_query, projection).limit(limit)
+            results = []
+            async for doc in cursor:
+                results.append(doc)
+            return results
+            
+        elif operation == "count":
+            filter_query = mongodb_query.get("filter", {})
+            return await collection.count_documents(filter_query)
+            
+        elif operation == "distinct":
+            field = mongodb_query.get("field", "_id")
+            filter_query = mongodb_query.get("filter", {})
+            return await collection.distinct(field, filter_query)
+            
+        elif operation == "aggregate":
+            pipeline = mongodb_query.get("pipeline", [])
+            cursor = collection.aggregate(pipeline)
+            results = []
+            async for doc in cursor:
+                results.append(doc)
+            return results
+        
+        else:
+            raise ValueError(f"不支持的查询操作: {operation}")
+    
+    async def _format_query_results(self, query_info: Dict[str, Any], results: Any) -> List[TextContent]:
+        """格式化查询结果"""
+        operation = query_info["mongodb_query"].get("operation", "find")
+        
+        text = f"## ✅ 查询执行成功\n\n"
+        text += f"**查询描述**: {query_info['query_description']}\n"
+        text += f"**目标集合**: `{query_info['collection_name']}`\n"
+        text += f"**查询类型**: {operation}\n\n"
+        
+        if operation == "count":
+            text += f"### 📊 统计结果\n\n"
+            text += f"**文档数量**: {results}\n"
+            
+        elif operation == "distinct":
+            text += f"### 📋 唯一值列表\n\n"
+            if isinstance(results, list):
+                for i, value in enumerate(results[:20], 1):  # 最多显示20个
+                    text += f"{i}. {value}\n"
+                if len(results) > 20:
+                    text += f"... 还有 {len(results) - 20} 个值\n"
+                text += f"\n**总计**: {len(results)} 个唯一值\n"
+            else:
+                text += f"结果: {results}\n"
+                
+        elif operation in ["find", "aggregate"]:
+            text += f"### 📄 查询结果\n\n"
+            if isinstance(results, list):
+                text += f"**返回记录数**: {len(results)}\n\n"
+                
+                for i, doc in enumerate(results[:5], 1):  # 最多显示5条记录
+                    text += f"#### 记录 {i}\n"
+                    text += "```json\n"
+                    import json
+                    text += json.dumps(doc, indent=2, ensure_ascii=False, default=str)
+                    text += "\n```\n\n"
+                
+                if len(results) > 5:
+                    text += f"*... 还有 {len(results) - 5} 条记录*\n\n"
+            else:
+                text += f"结果: {results}\n"
+        
+        # 添加下一步建议
+        text += "## 🎯 下一步操作\n\n"
+        text += "可以继续以下操作：\n"
+        text += "- `generate_query(query_description=\"新的查询需求\")` - 生成新查询\n"
+        text += "- `workflow_status()` - 查看工作流状态\n"
+        text += "- 分析查询结果，根据需要调整查询条件\n"
+        
+        return [TextContent(type="text", text=text)]
+    
+    async def _show_execution_plan(self, query_info: Dict[str, Any]) -> List[TextContent]:
+        """显示执行计划"""
+        try:
+            connection = self.connection_manager.get_instance_connection(query_info["instance_id"])
+            if not connection or not connection.client:
+                raise ValueError("数据库连接不可用")
+            
+            db = connection.client[query_info["database_name"]]
+            collection = db[query_info["collection_name"]]
+            mongodb_query = query_info["mongodb_query"]
+            
+            # 获取执行计划
+            if mongodb_query.get("operation") == "find":
+                filter_query = mongodb_query.get("filter", {})
+                explain_result = await collection.find(filter_query).explain()
+            else:
+                explain_result = {"message": "只有find查询支持执行计划分析"}
+            
+            text = f"## 📊 查询执行计划\n\n"
+            text += f"**查询类型**: {mongodb_query.get('operation', 'find')}\n"
+            text += f"**集合**: `{query_info['collection_name']}`\n\n"
+            
+            text += "### 📄 执行计划详情\n\n"
+            text += "```json\n"
+            import json
+            text += json.dumps(explain_result, indent=2, ensure_ascii=False, default=str)
+            text += "\n```\n\n"
+            
+            text += "### 📋 确认选项\n\n"
+            text += "查看执行计划后，请选择下一步操作：\n"
+            text += "- `generate_query(..., user_confirmation=\"A\")` - 确认执行查询\n"
+            text += "- `generate_query(..., user_confirmation=\"B\")` - 修改查询\n"
+            text += "- `generate_query(..., user_confirmation=\"D\")` - 取消查询\n"
+            
+            return [TextContent(type="text", text=text)]
+            
+        except Exception as e:
+            return [TextContent(
+                type="text",
+                text=f"## ❌ 获取执行计划失败\n\n错误: {str(e)}"
+            )]

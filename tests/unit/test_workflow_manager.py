@@ -104,27 +104,28 @@ class TestWorkflowManager:
         """测试阶段转换验证"""
         workflow = await self.workflow_manager.create_workflow(self.session_id)
         
-        # 从INIT阶段可以转换到INSTANCE_DISCOVERY
+        # 从INIT阶段可以转换到INSTANCE_ANALYSIS
         can_transition, message = await self.workflow_manager.can_transition_to(
-            self.session_id, WorkflowStage.INSTANCE_DISCOVERY
+            self.session_id, WorkflowStage.INSTANCE_ANALYSIS
         )
         assert can_transition is True
         
-        # 从INIT阶段不能直接转换到QUERY_GENERATION
+        # 从INIT阶段不能直接转换到QUERY_GENERATION（缺少必需数据）
         can_transition, message = await self.workflow_manager.can_transition_to(
             self.session_id, WorkflowStage.QUERY_GENERATION
         )
         assert can_transition is False
-        assert "不能从" in message
+        # 新的智能逻辑会检查数据完整性，而不是简单的阶段限制
+        assert ("缺少必需的数据" in message or "不能从" in message)
     
     @pytest.mark.asyncio
     async def test_transition_to(self):
         """测试阶段转换"""
         workflow = await self.workflow_manager.create_workflow(self.session_id)
         
-        # 转换到INSTANCE_DISCOVERY阶段
+        # 转换到INSTANCE_ANALYSIS阶段
         success, message = await self.workflow_manager.transition_to(
-            self.session_id, WorkflowStage.INSTANCE_DISCOVERY
+            self.session_id, WorkflowStage.INSTANCE_ANALYSIS
         )
         
         assert success is True
@@ -132,7 +133,7 @@ class TestWorkflowManager:
         
         # 验证工作流状态已更新
         updated_workflow = await self.workflow_manager.get_workflow(self.session_id)
-        assert updated_workflow.current_stage == WorkflowStage.INSTANCE_DISCOVERY
+        assert updated_workflow.current_stage == WorkflowStage.INSTANCE_ANALYSIS
         assert len(updated_workflow.stage_history) == 1
         assert updated_workflow.stage_history[0] == WorkflowStage.INIT
     
@@ -144,7 +145,7 @@ class TestWorkflowManager:
         # 转换并更新数据
         update_data = {"instance_id": "test_instance"}
         success, message = await self.workflow_manager.transition_to(
-            self.session_id, WorkflowStage.INSTANCE_DISCOVERY, update_data
+            self.session_id, WorkflowStage.INSTANCE_ANALYSIS, update_data
         )
         
         assert success is True
@@ -354,7 +355,7 @@ class TestWorkflowIntegration:
         
         # 2. 转换到实例发现
         success, _ = await manager.transition_to(
-            session_id, WorkflowStage.INSTANCE_DISCOVERY
+            session_id, WorkflowStage.INSTANCE_ANALYSIS
         )
         assert success is True
         
@@ -367,15 +368,15 @@ class TestWorkflowIntegration:
         
         # 4. 转换到数据库发现
         success, _ = await manager.transition_to(
-            session_id, WorkflowStage.DATABASE_DISCOVERY
+            session_id, WorkflowStage.DATABASE_ANALYSIS
         )
         assert success is True
         
         # 5. 验证最终状态
         final_workflow = await manager.get_workflow(session_id)
-        assert final_workflow.current_stage == WorkflowStage.DATABASE_DISCOVERY
+        assert final_workflow.current_stage == WorkflowStage.DATABASE_ANALYSIS
         assert final_workflow.instance_id == "prod_instance"
-        assert len(final_workflow.stage_history) == 3  # INIT -> INSTANCE_DISCOVERY -> INSTANCE_SELECTION
+        assert len(final_workflow.stage_history) == 3  # INIT -> INSTANCE_ANALYSIS -> INSTANCE_SELECTION
     
     @pytest.mark.asyncio
     async def test_workflow_data_persistence_across_sessions(self):
@@ -386,8 +387,8 @@ class TestWorkflowIntegration:
         manager1 = WorkflowManager(storage=self.mock_storage)
         workflow = await manager1.create_workflow(session_id)
         
-        # 先转换到 INSTANCE_DISCOVERY，然后再到 INSTANCE_SELECTION
-        await manager1.transition_to(session_id, WorkflowStage.INSTANCE_DISCOVERY)
+        # 先转换到 INSTANCE_ANALYSIS，然后再到 INSTANCE_SELECTION
+        await manager1.transition_to(session_id, WorkflowStage.INSTANCE_ANALYSIS)
         await manager1.transition_to(
             session_id, WorkflowStage.INSTANCE_SELECTION,
             {"instance_id": "test_instance", "database_name": "test_db"}

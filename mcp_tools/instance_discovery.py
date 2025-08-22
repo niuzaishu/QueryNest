@@ -137,11 +137,30 @@ class InstanceDiscoveryTool:
                 
                 result_text += "\n"
             
-            # 添加使用提示
-            result_text += "## 使用提示\n\n"
-            result_text += "- 使用 `discover_databases` 工具来探索特定实例的数据库\n"
-            result_text += "- 使用 `analyze_collection` 工具来分析集合结构\n"
-            result_text += f"- 可用的实例ID: {', '.join(instances.keys())}\n"
+            # 添加智能选择建议
+            result_text += "## 💡 选择建议\n\n"
+            
+            # 推荐健康的实例
+            healthy_instances = []
+            if include_health:
+                for instance_id in instances.keys():
+                    health_status = await self.connection_manager.check_instance_health(instance_id)
+                    if health_status["healthy"]:
+                        healthy_instances.append(instance_id)
+            
+            if healthy_instances:
+                recommended = healthy_instances[0]  # 选择第一个健康的实例
+                recommended_config = instances[recommended]
+                recommended_name = getattr(recommended_config, 'name', recommended)
+                
+                result_text += f"🎯 **推荐选择**: {recommended_name} ({recommended})\n"
+                result_text += f"```\nselect_instance(instance_id=\"{recommended}\")\n```\n\n"
+            
+            result_text += "## 📋 下一步操作\n\n"
+            result_text += "1. **选择实例**: 使用 `select_instance` 选择要使用的实例\n"
+            result_text += "2. **查看数据库**: 然后使用 `discover_databases` 查看数据库\n"
+            result_text += "3. **分析集合**: 使用 `analyze_collection` 分析特定集合\n\n"
+            result_text += f"**可用实例ID**: {', '.join(instances.keys())}\n"
             result_text += "- 在查询时需要指定 `instance_id` 参数\n"
             
             logger.info("实例发现完成", instance_count=len(instances))
